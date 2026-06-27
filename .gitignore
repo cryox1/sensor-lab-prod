@@ -1,0 +1,15 @@
+.env
+firmware/*/secrets.h
+firmware/*/build/
+mosquitto/data/
+mosquitto/log/
+data/
+backups/
+**/__pycache__/
+**/*.pyc
+web/node_modules/
+web/.next/
+web/out/
+.DS_Store
+*.log
+.claude/settings.local.json

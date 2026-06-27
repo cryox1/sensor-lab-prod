@@ -1,0 +1,151 @@
+name: sensor-lab
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: sensor-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ${SENSOR_DATA_DIR:-./data}/mosquitto/data:/mosquitto/data
+      - ${SENSOR_DATA_DIR:-./data}/mosquitto/log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/#' -C 1 -W 3 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: sensor-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda:33145
+      - --mode=dev-container
+    expose:
+      - "9092"
+      - "9644"
+    volumes:
+      - ${SENSOR_DATA_DIR:-./data}/redpanda:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  redpanda-console:
+    image: redpandadata/console:v2.7.2
+    container_name: sensor-redpanda-console
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "9580:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  timescaledb:
+    image: timescale/timescaledb:2.17.1-pg16
+    container_name: sensor-tsdb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    expose:
+      - "5432"
+    volumes:
+      - ${SENSOR_DATA_DIR:-./data}/tsdb:/var/lib/postgresql/data
+      - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  bridge:
+    build: ./bridge
+    container_name: sensor-bridge
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      KAFKA_BOOTSTRAP: redpanda:9092
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  tsdb-writer:
+    build: ./tsdb-writer
+    container_name: sensor-tsdb-writer
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP: redpanda:9092
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+
+  api:
+    build: ./api
+    container_name: sensor-api
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP: redpanda:9092
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      API_WRITE_TOKEN: ${API_WRITE_TOKEN:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+
+  web:
+    build: ./web
+    container_name: sensor-web
+    restart: unless-stopped
+    environment:
+      # Leave unset to auto-detect from browser host (works for LAN, Tailscale, localhost).
+      # Set only when API is behind a fixed hostname/reverse proxy.
+      NEXT_PUBLIC_API_BASE: ${WEB_API_BASE:-}
+      NEXT_PUBLIC_WS_URL: ${WEB_WS_URL:-}
+      NEXT_PUBLIC_API_PORT: ${WEB_API_PORT:-8000}
+      NEXT_PUBLIC_API_WRITE_TOKEN: ${WEB_API_WRITE_TOKEN:-}
+    ports:
+      - "9530:3000"
+    depends_on:
+      - api
+
+# Stateful data lives in bind mounts under ${SENSOR_DATA_DIR} (default ./data
+# locally; e.g. /mnt/data/sensor-lab on a server). No named volumes:
+# a named volume on the host root fs is what filled the disk and, when a deploy
+# reverted the compose, mounted an empty volume and wiped the DB. See AGENTS.md.
