@@ -1,5 +1,3 @@
-CREATE EXTENSION IF NOT EXISTS timescaledb;
-
 CREATE TABLE IF NOT EXISTS telemetry (
   ts            TIMESTAMPTZ NOT NULL,
   device_id     TEXT        NOT NULL,
@@ -21,7 +19,7 @@ CREATE TABLE IF NOT EXISTS telemetry (
 
 -- Idempotent migrations for upgrades on existing volumes (init.sql
 -- only runs on fresh DB init; the ALTERs below also run from the
--- tsdb-writer on startup).
+-- ingest service on startup).
 ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS eco2_ppm INTEGER;
 ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS tvoc_ppb INTEGER;
 ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS aqi      SMALLINT;
@@ -36,10 +34,22 @@ ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS batt_v    DOUBLE PRECISION;
 -- Atmospheric pressure (BME280 nodes, e.g. BME280_xiaoc6).
 ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS pressure_hpa DOUBLE PRECISION;
 
-SELECT create_hypertable('telemetry', 'ts', if_not_exists => TRUE);
-
 CREATE INDEX IF NOT EXISTS telemetry_device_ts_idx
   ON telemetry (device_id, ts DESC);
+
+-- Dead-letter store for malformed payloads (was the Kafka
+-- sensors.telemetry.dlq topic). The ingest service writes a row here for any
+-- payload it can't decode/validate/insert; inspect with
+-- `SELECT * FROM telemetry_dlq ORDER BY received_at DESC;`. Created here for
+-- fresh inits; the ingest service runs the same CREATE on startup so existing
+-- volumes pick it up.
+CREATE TABLE IF NOT EXISTS telemetry_dlq (
+  id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  topic       TEXT,
+  payload     TEXT,
+  reason      TEXT
+);
 
 -- User-editable display names + dashboard visibility for sensors.
 -- Keyed by device_id so the telemetry stream and MQTT topics are

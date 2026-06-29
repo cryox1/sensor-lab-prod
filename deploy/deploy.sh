@@ -6,8 +6,8 @@
 #   * Sync ONLY source dirs, with NO --delete. The server's docker-compose.yml,
 #     .env, data dirs, and any server-only files are never in the push set, so
 #     they can't be overwritten or deleted.
-#   * NEVER `docker compose down` the stack. Stateful services (timescaledb,
-#     redpanda, mosquitto) stay up so their volumes are never remounted.
+#   * NEVER `docker compose down` the stack. Stateful services (postgres,
+#     mosquitto) stay up so their volumes are never remounted.
 #   * Rebuild/restart only the app services.
 set -euo pipefail
 
@@ -33,14 +33,14 @@ ssh_remote "mkdir -p ${REMOTE}/mosquitto"
 echo "==> Backing up production DB before deploy (abort on failure)"
 if ! ssh_remote "bash -s ${REMOTE}" < "${SCRIPT_DIR}/backup.sh"; then
   echo "!! Backup FAILED -- aborting deploy to protect production data." >&2
-  echo "   (Is the timescaledb container up? Check: ssh ${HOST} 'cd ${REMOTE} && docker compose ps')" >&2
+  echo "   (Is the postgres container up? Check: ssh ${HOST} 'cd ${REMOTE} && docker compose ps')" >&2
   exit 1
 fi
 
 # --- 2. Sync ONLY source dirs. No --delete. docker-compose.yml and .env are
 #        intentionally NOT in this list, so the server's copies are untouched. ---
 echo "==> Rsyncing source -> ${HOST}:${REMOTE} (whitelist, no --delete)"
-SYNC_PATHS=( api bridge tsdb-writer timescaledb web firmware deploy README.md )
+SYNC_PATHS=( api ingest postgres web firmware deploy README.md )
 rsync -avz \
   --exclude 'web/node_modules/' \
   --exclude 'web/.next/' \
@@ -67,30 +67,32 @@ fi
 # --- 4. Build + restart ONLY the app services. Stateful containers are brought
 #        up if down but NEVER recreated, so their volumes are never remounted. ---
 echo "==> Ensuring stateful services are up (never recreated)"
-ssh_remote "cd ${REMOTE} && docker compose up -d --no-recreate timescaledb redpanda mosquitto"
+ssh_remote "cd ${REMOTE} && docker compose up -d --no-recreate postgres mosquitto"
 
 echo "==> Building + restarting app services"
-ssh_remote "cd ${REMOTE} && docker compose up -d --build bridge tsdb-writer api web redpanda-console"
+ssh_remote "cd ${REMOTE} && docker compose up -d --build ingest api web"
 
 echo "==> Status"
 ssh_remote "cd ${REMOTE} && docker compose ps"
 
 echo "==> Recent logs"
-ssh_remote "cd ${REMOTE} && docker compose logs --tail 20 bridge tsdb-writer api web"
+ssh_remote "cd ${REMOTE} && docker compose logs --tail 20 ingest api web"
 
 cat <<EOF
 
 ==> Deploy complete.
 
   Access via SSH tunnel:
-    ssh -i ${KEY} -L 9530:localhost:9530 -L 9580:localhost:9580 -L 8000:localhost:8000 ${REMOTE_USER}@${HOST}
+    ssh -i ${KEY} -L 9530:localhost:9530 -L 8000:localhost:8000 ${REMOTE_USER}@${HOST}
 
   Then open:
     web app          http://localhost:9530
-    redpanda console http://localhost:9580
     api              http://localhost:8000
 
   MQTT broker is on ${HOST}:1883 (LAN) -- point ESP MQTT_HOST at the server's LAN IP.
+
+  Malformed payloads land in the telemetry_dlq table:
+    ssh ${HOST} "cd ${REMOTE} && docker compose exec postgres psql -U \${POSTGRES_USER:-sensors} -d \${POSTGRES_DB:-sensors} -c 'SELECT * FROM telemetry_dlq ORDER BY received_at DESC LIMIT 20;'"
 
   A pre-deploy DB backup was written to \${SENSOR_DATA_DIR}/backups on the server.
 EOF

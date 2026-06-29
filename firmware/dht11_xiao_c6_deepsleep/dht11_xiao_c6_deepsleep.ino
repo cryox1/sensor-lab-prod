@@ -82,8 +82,8 @@ IPAddress STATIC_DNS2 (1, 1, 1, 1);
 #define MQTT_CLIENT_ID "esp-" DEVICE_ID
 
 // ---- Diagnostics ----
-// Published (retained) to a non-telemetry topic the bridge ignores, so it never
-// reaches Kafka/DB. Watch with: mosquitto_sub -t 'sensors/lab/xiao_c6/debug'
+// Published (retained) to a non-telemetry topic the ingest service ignores, so it
+// never reaches the DB. Watch with: mosquitto_sub -t 'sensors/lab/xiao_c6/debug'
 #define DEBUG_TOPIC    "sensors/lab/" DEVICE_ID "/debug"
 
 // ---- Persisted across deep sleep (ESP32 RTC memory) ----

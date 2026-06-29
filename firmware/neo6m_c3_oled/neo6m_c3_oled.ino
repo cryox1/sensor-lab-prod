@@ -1,7 +1,7 @@
 // NEO-6M GPS on an ESP32-C3 board with an onboard 0.42" 72x40 OLED.
 // Reads location over UART, shows it on the OLED, and publishes it to the
 // sensor-lab stack over MQTT — same pipeline as the ESP8266 sketches
-// (MQTT -> bridge -> Kafka -> tsdb-writer -> TimescaleDB).
+// (MQTT -> ingest -> PostgreSQL).
 //
 // Differences from the other sketches in this repo:
 //   * ESP32-C3, not ESP8266: <WiFi.h> and WiFi.config() takes TWO DNS args.

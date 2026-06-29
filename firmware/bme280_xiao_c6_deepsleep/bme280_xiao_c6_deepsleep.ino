@@ -68,8 +68,8 @@
 // persists across resets, so it looked like a silent hang) -- removed.
 
 // ---- Diagnostics ----
-// Published (retained) to a non-telemetry topic the bridge ignores, so it never
-// reaches Kafka/DB. Watch with: mosquitto_sub -t 'sensors/lab/BME280_xiaoc6/debug'
+// Published (retained) to a non-telemetry topic the ingest service ignores, so it
+// never reaches the DB. Watch with: mosquitto_sub -t 'sensors/lab/BME280_xiaoc6/debug'
 #define DEBUG_TOPIC    "sensors/lab/" DEVICE_ID "/debug"
 
 // ---- Static IPv4 (ESP32 WiFi.config() takes TWO DNS servers) ----

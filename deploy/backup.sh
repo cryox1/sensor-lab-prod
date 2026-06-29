@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Back up the sensor-lab TimescaleDB to a gzipped pg_dump.
+# Back up the sensor-lab PostgreSQL database to a gzipped pg_dump.
 #
 # Writes to ${SENSOR_DATA_DIR}/backups (the big disk on the server,
 # ./data/backups locally), keeps the newest BACKUP_KEEP, and FAILS HARD if
@@ -29,7 +29,7 @@ echo "==> pg_dump ${POSTGRES_DB} -> ${OUT}"
 # pipefail makes a failed pg_dump fail the whole pipeline.
 # `</dev/null`: give the exec its own stdin so it can't swallow the rest of this
 # script when backup.sh is itself fed to `bash -s` over ssh (deploy.sh does that).
-if ! docker compose exec -T timescaledb \
+if ! docker compose exec -T postgres \
       pg_dump -U "${POSTGRES_USER}" "${POSTGRES_DB}" </dev/null | gzip > "${OUT}.tmp"; then
   echo "!! pg_dump failed -- no backup written" >&2
   rm -f "${OUT}.tmp"
