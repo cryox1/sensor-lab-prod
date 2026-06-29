@@ -49,6 +49,7 @@ on the remote before deploying.
 | Postgres password | `POSTGRES_PASSWORD` | **no default — set a strong one** |
 | Postgres user / db name | `POSTGRES_USER` / `POSTGRES_DB` | both default `sensors` |
 | Where stateful data is stored | `SENSOR_DATA_DIR` | `./data` locally; the big disk on a server |
+| (If the host already runs another Postgres) host port for sensor-lab's DB | `POSTGRES_HOST_PORT` | default `5433` — a non-standard port so it never collides with an existing PostgreSQL; services inside compose still use the internal `5432` |
 | Will the dashboard be opened from another machine (LAN/Tailscale), not just localhost? | — | if yes, set the write token below |
 | (If non-localhost) a shared write token | `API_WRITE_TOKEN` **and** `WEB_API_WRITE_TOKEN` (same value) | unset = rename/hide endpoints are open |
 | (Optional) lock the API to specific origins | `CORS_ORIGINS` | default `*` |
@@ -95,7 +96,6 @@ docker compose up -d
 ```
 Open:
 - web app — http://localhost:9530
-- Redpanda Console — http://localhost:9580
 - API — http://localhost:8000 (MQTT on `1883`)
 
 ### Remote server
@@ -112,7 +112,7 @@ export SENSOR_LAB_HOST=myserver SENSOR_LAB_USER=youruser \
 #    source dirs (no --delete), and rebuilds just the app services.
 ./deploy/deploy.sh
 ```
-`deploy.sh` prints an SSH tunnel command at the end for reaching the web/console/API
+`deploy.sh` prints an SSH tunnel command at the end for reaching the web/API
 ports over the SSH connection.
 
 ### Firmware (only if flashing)
@@ -134,15 +134,16 @@ Run in order — each step isolates one hop:
 # 1. Devices publishing? (subscribe to everything)
 docker compose exec mosquitto mosquitto_sub -t 'sensors/#' -v
 
-# 2. Reaching Kafka? — open Redpanda Console at :9580, topic `sensors.telemetry`
-#    (malformed payloads land in `sensors.telemetry.dlq`).
+# 2. Ingest service healthy? (MQTT → Postgres)
+docker compose logs --tail=100 ingest
 
-# 3. Writer healthy?
-docker compose logs --tail=100 tsdb-writer
-
-# 4. Rows in the DB?
-docker compose exec timescaledb psql -U sensors -d sensors \
+# 3. Rows in the DB?
+docker compose exec postgres psql -U sensors -d sensors \
   -c 'SELECT count(*), max(ts) FROM telemetry;'
+
+# 4. Malformed payloads? They land in the telemetry_dlq table:
+docker compose exec postgres psql -U sensors -d sensors \
+  -c 'SELECT * FROM telemetry_dlq ORDER BY received_at DESC LIMIT 20;'
 ```
 Finally, open the web app (`:9530`) and confirm sensors appear.
 

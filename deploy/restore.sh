@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Restore a gzipped pg_dump (from backup.sh) into the sensor-lab TimescaleDB.
+# Restore a gzipped pg_dump (from backup.sh) into the sensor-lab PostgreSQL DB.
 #
-# DESTRUCTIVE: drops and recreates the target database. Takes a fresh safety
-# backup first, and wraps the load in timescaledb_pre_restore()/post_restore()
-# (required to correctly reload hypertables).
+# DESTRUCTIVE: drops and recreates the target database (only the sensor-lab
+# 'postgres' container — never any other PostgreSQL on the host). Takes a fresh
+# safety backup first.
 #
 # Usage: restore.sh <path/to/sensors_YYYYmmdd_HHMMSS.sql.gz>
 set -euo pipefail
@@ -29,17 +29,14 @@ read -r -p "Type the database name ('${POSTGRES_DB}') to confirm: " confirm
 echo "==> taking a pre-restore safety backup first"
 "${PROJECT_DIR}/deploy/backup.sh" "${PROJECT_DIR}"
 
-psqlc() { docker compose exec -T timescaledb psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" "$@"; }
+psqlc() { docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" "$@"; }
 
 echo "==> recreating empty database ${POSTGRES_DB}"
 psqlc -d postgres -c "DROP DATABASE IF EXISTS ${POSTGRES_DB} WITH (FORCE);"
 psqlc -d postgres -c "CREATE DATABASE ${POSTGRES_DB} OWNER ${POSTGRES_USER};"
 
-echo "==> timescale pre-restore -> load -> post-restore"
-psqlc -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"
-psqlc -d "${POSTGRES_DB}" -c "SELECT timescaledb_pre_restore();"
+echo "==> loading dump"
 gunzip -c "${FILE}" | psqlc -d "${POSTGRES_DB}"
-psqlc -d "${POSTGRES_DB}" -c "SELECT timescaledb_post_restore();"
 
 echo "==> restore complete"
 psqlc -d "${POSTGRES_DB}" -c "SELECT count(*), max(ts) FROM telemetry;"

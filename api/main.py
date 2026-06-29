@@ -9,13 +9,13 @@ GET  /groups                           -- user-defined sensor groups + members
 POST /groups                           -- create a named group
 PUT  /groups/{id}                      -- rename a group
 DELETE /groups/{id}                    -- delete a group (members are unassigned)
-GET  /history?device_id=...            -- recent telemetry from TimescaleDB
+GET  /history?device_id=...            -- recent telemetry from Postgres
 GET  /history-all                      -- recent telemetry for every device
 GET  /latest                           -- newest stored row per device (any age)
 GET  /thresholds                       -- user-customized chart threshold lines
 PUT  /thresholds/{metric}              -- set threshold lines for a metric
 DELETE /thresholds/{metric}            -- revert a metric to built-in defaults
-WS   /ws/live                          -- live telemetry fanned out from Kafka
+WS   /ws/live                          -- live telemetry fanned out from MQTT
 
 Auth: PUT endpoints require header `X-API-Token: <API_WRITE_TOKEN>` when
 that env var is set. When unset (default) PUTs are open — same behavior
@@ -31,10 +31,10 @@ from datetime import datetime, timezone, timedelta
 
 import re
 
+import paho.mqtt.client as mqtt
 import psycopg
 import psycopg_pool
 from psycopg.types.json import Json
-from confluent_kafka import Consumer
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -42,8 +42,9 @@ from pydantic import BaseModel, Field
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("api")
 
-KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "redpanda:9092")
-KAFKA_TOPIC = "sensors.telemetry"
+MQTT_HOST = os.environ.get("MQTT_HOST", "mosquitto")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
+MQTT_TOPIC = "sensors/+/+/telemetry"
 
 # Comma-separated allowed CORS origins. Default "*" preserves previous behavior;
 # tighten to a real host on Tailscale/LAN if you care.
@@ -70,47 +71,64 @@ def require_write_token(x_api_token: str | None = Header(default=None)):
 
 
 class LiveHub:
-    """One Kafka consumer, fan-out to N WebSocket clients."""
+    """One MQTT subscription, fan-out to N WebSocket clients.
+
+    paho runs its network loop in its own thread (loop_start); messages are
+    handed back to the asyncio loop via run_coroutine_threadsafe so the
+    WebSocket sends happen on the event loop.
+    """
 
     def __init__(self):
         self.clients: set[WebSocket] = set()
-        self.task: asyncio.Task | None = None
+        self.client: mqtt.Client | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
 
     async def add(self, ws: WebSocket):
         self.clients.add(ws)
-        if self.task is None:
-            self.task = asyncio.create_task(self._pump())
+        if self.client is None:
+            self._start()
 
     async def remove(self, ws: WebSocket):
         self.clients.discard(ws)
 
-    async def _pump(self):
-        consumer = Consumer({
-            "bootstrap.servers": KAFKA_BOOTSTRAP,
-            "group.id": f"api-live-{uuid.uuid4()}",
-            "auto.offset.reset": "latest",
-            "enable.auto.commit": False,
-        })
-        consumer.subscribe([KAFKA_TOPIC])
-        log.info("live consumer started")
+    def _start(self):
+        self.loop = asyncio.get_running_loop()
+        client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2,
+            client_id=f"api-live-{uuid.uuid4()}",
+        )
+        client.on_connect = self._on_connect
+        client.on_message = self._on_message
+        client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=60)
+        client.loop_start()
+        self.client = client
+        log.info("live MQTT subscriber started")
+
+    def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        client.subscribe(MQTT_TOPIC, qos=0)
+
+    def _on_message(self, client, userdata, msg):
+        # Validate just like the ingest path so the live feed only carries
+        # well-formed readings (same content the dashboard expects).
         try:
-            while True:
-                msg = await asyncio.get_event_loop().run_in_executor(
-                    None, consumer.poll, 0.5
-                )
-                if msg is None or msg.error():
-                    continue
-                text = msg.value().decode("utf-8")
-                dead = []
-                for ws in list(self.clients):
-                    try:
-                        await ws.send_text(text)
-                    except Exception:
-                        dead.append(ws)
-                for ws in dead:
-                    self.clients.discard(ws)
-        finally:
-            consumer.close()
+            payload = json.loads(msg.payload.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+        if "device_id" not in payload or "ts" not in payload:
+            return
+        text = msg.payload.decode("utf-8")
+        if self.loop is not None:
+            asyncio.run_coroutine_threadsafe(self._broadcast(text), self.loop)
+
+    async def _broadcast(self, text: str):
+        dead = []
+        for ws in list(self.clients):
+            try:
+                await ws.send_text(text)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.clients.discard(ws)
 
 
 hub = LiveHub()
@@ -522,23 +540,25 @@ async def history(
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             if bucket_seconds:
-                # Scalar metrics are averaged per bucket; GPS columns use last()
-                # so each bucket keeps one *real* fix (averaging lat/lon would
-                # invent phantom midpoints on a moving track).
+                # Scalar metrics are averaged per bucket; GPS columns keep the
+                # latest *real* fix in the bucket (averaging lat/lon would
+                # invent phantom midpoints on a moving track). The plain-Postgres
+                # `(array_agg(col ORDER BY ts DESC))[1]` returns the value at the
+                # row with the max ts — same semantics as Timescale's last().
                 await cur.execute(
                     """
-                    SELECT time_bucket(make_interval(secs => %s), ts) AS bucket,
+                    SELECT date_bin(make_interval(secs => %s), ts, TIMESTAMPTZ 'epoch') AS bucket,
                            AVG(temp_c)            AS temp_c,
                            AVG(humidity)          AS humidity,
                            AVG(heat_index_c)      AS heat_index_c,
                            AVG(eco2_ppm)::INTEGER AS eco2_ppm,
                            AVG(tvoc_ppb)::INTEGER AS tvoc_ppb,
                            AVG(aqi)::INTEGER      AS aqi,
-                           last(lat, ts)          AS lat,
-                           last(lon, ts)          AS lon,
-                           last(alt_m, ts)        AS alt_m,
-                           last(sats, ts)         AS sats,
-                           last(speed_kmh, ts)    AS speed_kmh,
+                           (array_agg(lat       ORDER BY ts DESC))[1] AS lat,
+                           (array_agg(lon       ORDER BY ts DESC))[1] AS lon,
+                           (array_agg(alt_m     ORDER BY ts DESC))[1] AS alt_m,
+                           (array_agg(sats      ORDER BY ts DESC))[1] AS sats,
+                           (array_agg(speed_kmh ORDER BY ts DESC))[1] AS speed_kmh,
                            AVG(batt_v)            AS batt_v,
                            AVG(pressure_hpa)      AS pressure_hpa
                     FROM telemetry
@@ -590,22 +610,22 @@ async def history_all(
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             if bucket_seconds:
-                # See /history: GPS columns use last() to keep a real fix per bucket.
+                # See /history: GPS columns keep the latest real fix per bucket.
                 await cur.execute(
                     """
                     SELECT device_id,
-                           time_bucket(make_interval(secs => %s), ts) AS bucket,
+                           date_bin(make_interval(secs => %s), ts, TIMESTAMPTZ 'epoch') AS bucket,
                            AVG(temp_c)            AS temp_c,
                            AVG(humidity)          AS humidity,
                            AVG(heat_index_c)      AS heat_index_c,
                            AVG(eco2_ppm)::INTEGER AS eco2_ppm,
                            AVG(tvoc_ppb)::INTEGER AS tvoc_ppb,
                            AVG(aqi)::INTEGER      AS aqi,
-                           last(lat, ts)          AS lat,
-                           last(lon, ts)          AS lon,
-                           last(alt_m, ts)        AS alt_m,
-                           last(sats, ts)         AS sats,
-                           last(speed_kmh, ts)    AS speed_kmh,
+                           (array_agg(lat       ORDER BY ts DESC))[1] AS lat,
+                           (array_agg(lon       ORDER BY ts DESC))[1] AS lon,
+                           (array_agg(alt_m     ORDER BY ts DESC))[1] AS alt_m,
+                           (array_agg(sats      ORDER BY ts DESC))[1] AS sats,
+                           (array_agg(speed_kmh ORDER BY ts DESC))[1] AS speed_kmh,
                            AVG(batt_v)            AS batt_v,
                            AVG(pressure_hpa)      AS pressure_hpa
                     FROM telemetry

@@ -150,7 +150,7 @@ export default function Page() {
         <div>
           <h1 style={{ marginBottom: 4, marginTop: 0 }}>sensor-lab</h1>
           <p style={{ opacity: 0.6, margin: 0 }}>
-            ESP8266 → MQTT → Kafka → TimescaleDB
+            ESP8266 → MQTT → PostgreSQL
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
