@@ -46,7 +46,7 @@
 
 ## Requirements
 
-### R1 — Drag & drop assignment board (Proposed)
+### R1 — Drag & drop assignment board (Implemented)
 
 The default view of `/groups` becomes a board: one droppable container per
 group plus an "ungrouped" zone; each sensor is a draggable chip showing its
