@@ -40,7 +40,7 @@ Source: `web/app/overview/page.jsx`, `web/app/_components/Chart.jsx`,
 
 ## Requirements
 
-### R1 — CSV export of the displayed dataset (Proposed)
+### R1 — CSV export of the displayed dataset (Implemented)
 
 An "export CSV" button in the controls row downloads the currently displayed
 dataset as a CSV file, generated client-side.

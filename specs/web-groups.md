@@ -73,7 +73,7 @@ Acceptance criteria:
   reloads; board is the default.
 - An empty group renders a drop placeholder and remains a valid drop target.
 
-### R2 — CSV export on the group overview (Proposed)
+### R2 — CSV export on the group overview (Implemented)
 
 Same behavior as web-overview R1, scoped to the group page `/groups/[id]`.
 
