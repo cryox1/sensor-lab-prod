@@ -91,7 +91,7 @@ the bucket (same semantics as Timescale's `last()`).
 
 ## Requirements
 
-### R1 — Device stats + deletion endpoints (Proposed)
+### R1 — Device stats + deletion endpoints (Implemented)
 
 Support the manage-drawer delete flow (`web-dashboard.md` R1).
 

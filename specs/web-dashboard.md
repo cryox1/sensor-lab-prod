@@ -53,7 +53,7 @@ Source: `web/app/page.jsx`, `web/app/_components/SensorCard.jsx`,
 
 ## Requirements
 
-### R1 — Delete a device from the manage drawer (Proposed)
+### R1 — Delete a device from the manage drawer (Implemented)
 
 The manage drawer gets a per-device "delete" action for sensors that no longer
 exist (e.g. retired or synthetic test devices). Deleting removes the device's
