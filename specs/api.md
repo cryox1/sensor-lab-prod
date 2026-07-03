@@ -91,14 +91,32 @@ the bucket (same semantics as Timescale's `last()`).
 
 ## Requirements
 
-None yet.
+### R1 — Device stats + deletion endpoints (Proposed)
+
+Support the manage-drawer delete flow (`web-dashboard.md` R1).
+
+Acceptance criteria:
+
+- `GET /devices/{id}/stats` (open) returns
+  `{device_id, rows, first_ts, last_ts}` — COUNT/MIN/MAX over `telemetry` for
+  that device; `rows: 0` with null timestamps when no readings exist.
+- `DELETE /devices/{id}` (write token) with query param `delete_data`
+  (bool, default `false`) always deletes the device's `sensor_aliases` row and
+  `sensor_group_members` membership; with `delete_data=true` it also deletes
+  all `telemetry` rows for the device_id. Response:
+  `{device_id, deleted: true, data_deleted: bool, remaining_rows: int}`.
+- Deletion is idempotent: an unknown device_id returns the same shape
+  (`remaining_rows: 0`), no 404.
+- `telemetry_dlq` rows are untouched (keyed by topic, not device_id).
+- `metric_thresholds` are untouched (global per-metric, not per-device).
 
 ## Non-goals
 
 - No pagination, rate limiting, or per-user auth — single shared write token
   at most; reads are always open.
 - No server-side downsampling policy beyond caller-chosen `bucket_seconds`.
-- No write path for telemetry — only `ingest` writes readings.
+- No write path for telemetry — only `ingest` inserts readings (R1 adds
+  deletion of a device's readings, but no inserts/updates via the API).
 
 ## Open questions
 

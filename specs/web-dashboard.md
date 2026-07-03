@@ -53,13 +53,40 @@ Source: `web/app/page.jsx`, `web/app/_components/SensorCard.jsx`,
 
 ## Requirements
 
-None yet.
+### R1 — Delete a device from the manage drawer (Proposed)
+
+The manage drawer gets a per-device "delete" action for sensors that no longer
+exist (e.g. retired or synthetic test devices). Deleting removes the device's
+metadata (alias/display name, hidden flag, group membership); a popup asks
+whether the device's stored readings should be deleted from the database too
+(default: keep them).
+
+Acceptance criteria:
+
+- **Given** the manage drawer, **when** "delete" is clicked on a device,
+  **then** a confirmation popup opens showing the display name, monospace
+  device_id, and the device's current number of stored telemetry rows
+  (fetched from `GET /devices/{id}/stats`).
+- **Given** the popup, **then** it offers exactly: cancel (no request),
+  "delete, keep readings" (`DELETE /devices/{id}?delete_data=false`), and —
+  only when stored rows exist — a destructive-styled "delete incl. N readings"
+  (`delete_data=true`). Writes carry `writeHeaders()`.
+- **Given** stored rows exist and readings are kept, **then** the popup states
+  the caveat that the device will reappear in the device list, because the
+  list is rebuilt from stored telemetry (`GET /devices` FULL OUTER JOIN).
+- **Given** a completed delete, **then** the popup closes and `/devices` is
+  revalidated so the drawer/grid reflect the removal.
+- **Given** the DELETE fails (non-2xx or network error), **then** an error is
+  shown in the popup and nothing changes client-side.
+- **Given** the sensor still publishes telemetry, **then** it reappears —
+  deletion does not block re-ingestion (documented behavior, not prevented).
 
 ## Non-goals
 
 - No historical charts or sparklines on the cards — history lives on
   `/history/[device_id]`, `/overview` and `/groups/[id]`.
-- No device deletion — hiding is the only removal concept; data keeps recording.
+- Device deletion (R1) does not block re-ingestion — a still-publishing sensor
+  recreates itself; there is no ban list.
 - No server-side calibration — offsets are per-browser display state only.
 
 ## Open questions
