@@ -55,6 +55,15 @@ shared LAN, set `API_WRITE_TOKEN` (api) + `WEB_API_WRITE_TOKEN` (web) to the
 same value in `.env`; the browser will include `X-API-Token` on writes.
 Optionally also tighten `CORS_ORIGINS`. Both are documented in `.env.example`.
 
+## Development workflow (specs)
+
+Behavior is spec-driven: every area (each web page, the API, ingest) has a
+spec file under [`specs/`](specs/). New features start as a `Proposed`
+requirement with acceptance criteria in the relevant spec, get implemented,
+verified against the criteria, and flipped to `Implemented` in the same
+commit. Changing existing behavior means updating the spec in the same commit.
+See [`specs/README.md`](specs/README.md) for the workflow.
+
 ## What runs where
 
 | Service   | Host port | Purpose                                  |
