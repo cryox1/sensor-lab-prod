@@ -2,9 +2,11 @@
 Web API.
 
 GET  /devices                          -- known device_ids + alias + hidden flag
+GET  /devices/{id}/stats               -- stored-row count + time bounds
 PUT  /devices/{id}/display-name        -- set/clear user-facing alias
 PUT  /devices/{id}/visibility          -- hide / unhide a device on the dashboard
 PUT  /devices/{id}/group               -- assign a device to a group (or clear)
+DELETE /devices/{id}                   -- delete metadata (+ readings if asked)
 GET  /groups                           -- user-defined sensor groups + members
 POST /groups                           -- create a named group
 PUT  /groups/{id}                      -- rename a group
@@ -328,6 +330,56 @@ async def set_visibility(device_id: str, body: VisibilityBody):
                     (device_id,),
                 )
     return {"device_id": device_id, "hidden": body.hidden}
+
+
+@app.get("/devices/{device_id}/stats")
+async def device_stats(device_id: str):
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT COUNT(*), MIN(ts), MAX(ts) FROM telemetry WHERE device_id = %s",
+                (device_id,),
+            )
+            rows, first_ts, last_ts = await cur.fetchone()
+    return {
+        "device_id": device_id,
+        "rows": rows,
+        "first_ts": first_ts.isoformat() if first_ts is not None else None,
+        "last_ts": last_ts.isoformat() if last_ts is not None else None,
+    }
+
+
+@app.delete("/devices/{device_id}", dependencies=[Depends(require_write_token)])
+async def delete_device(device_id: str, delete_data: bool = False):
+    # Idempotent: metadata (alias, group membership) always goes; the stored
+    # readings only on request. A device whose rows survive reappears in
+    # /devices — that list is rebuilt from telemetry (see specs/api.md R1).
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM sensor_group_members WHERE device_id = %s",
+                (device_id,),
+            )
+            await cur.execute(
+                "DELETE FROM sensor_aliases WHERE device_id = %s",
+                (device_id,),
+            )
+            if delete_data:
+                await cur.execute(
+                    "DELETE FROM telemetry WHERE device_id = %s",
+                    (device_id,),
+                )
+            await cur.execute(
+                "SELECT COUNT(*) FROM telemetry WHERE device_id = %s",
+                (device_id,),
+            )
+            (remaining,) = await cur.fetchone()
+    return {
+        "device_id": device_id,
+        "deleted": True,
+        "data_deleted": delete_data,
+        "remaining_rows": remaining,
+    }
 
 
 GROUP_NAME_MAX = 64

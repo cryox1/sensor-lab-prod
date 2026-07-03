@@ -11,11 +11,18 @@ function formatTs(iso) {
 
 export default function ManageDevicesDrawer({ api, devices, devicesKey, open, onClose }) {
   const [busy, setBusy] = useState(null);
+  // Delete confirmation popup: { device, stats: {rows,...}|null, error } or null.
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Escape closes the delete popup first, the drawer second.
+      setConfirmDelete((c) => {
+        if (!c) onClose();
+        return null;
+      });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -32,6 +39,45 @@ export default function ManageDevicesDrawer({ api, devices, devicesKey, open, on
         body: JSON.stringify({ hidden }),
       });
       if (devicesKey) mutate(devicesKey);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function openDelete(device) {
+    setConfirmDelete({ device, stats: null });
+    // Row count for the popup; on failure the popup still works, just
+    // without the count.
+    try {
+      const res = await fetch(
+        `${api}/devices/${encodeURIComponent(device.device_id)}/stats`
+      );
+      if (!res.ok) return;
+      const stats = await res.json();
+      setConfirmDelete((c) =>
+        c && c.device.device_id === device.device_id ? { ...c, stats } : c
+      );
+    } catch {
+      // popup shows without the count
+    }
+  }
+
+  async function deleteDevice(deviceId, deleteData) {
+    setBusy(deviceId);
+    try {
+      const res = await fetch(
+        `${api}/devices/${encodeURIComponent(deviceId)}?delete_data=${deleteData}`,
+        { method: "DELETE", headers: writeHeaders() }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setConfirmDelete(null);
+      if (devicesKey) mutate(devicesKey);
+    } catch (err) {
+      setConfirmDelete((c) =>
+        c
+          ? { ...c, error: `delete failed (${err.message}) — check API / write token` }
+          : c
+      );
     } finally {
       setBusy(null);
     }
@@ -142,7 +188,7 @@ export default function ManageDevicesDrawer({ api, devices, devicesKey, open, on
                 >
                   {d.device_id} · last seen {formatTs(d.last_seen)}
                 </div>
-                <div style={{ marginTop: 8 }}>
+                <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
                   <button
                     type="button"
                     disabled={busy === d.device_id}
@@ -159,6 +205,22 @@ export default function ManageDevicesDrawer({ api, devices, devicesKey, open, on
                   >
                     {d.hidden ? "show on dashboard" : "hide from dashboard"}
                   </button>
+                  <button
+                    type="button"
+                    disabled={busy === d.device_id}
+                    onClick={() => openDelete(d)}
+                    style={{
+                      background: "transparent",
+                      color: "#f85149",
+                      border: "1px solid #2a313c",
+                      borderRadius: 6,
+                      padding: "4px 10px",
+                      fontSize: 13,
+                      cursor: "pointer",
+                    }}
+                  >
+                    delete
+                  </button>
                 </div>
               </li>
             ))}
@@ -169,6 +231,130 @@ export default function ManageDevicesDrawer({ api, devices, devicesKey, open, on
           main grid.
         </p>
       </aside>
+
+      {confirmDelete && (
+        <DeleteDeviceDialog
+          state={confirmDelete}
+          busy={busy === confirmDelete.device.device_id}
+          onCancel={() => setConfirmDelete(null)}
+          onDelete={(deleteData) =>
+            deleteDevice(confirmDelete.device.device_id, deleteData)
+          }
+        />
+      )}
     </div>
   );
+}
+
+// Confirmation popup for deleting a device (specs/web-dashboard.md R1):
+// metadata always goes; the stored readings only if the destructive option is
+// chosen. Keeping readings means the device reappears — /devices is rebuilt
+// from stored telemetry.
+function DeleteDeviceDialog({ state, busy, onCancel, onDelete }) {
+  const { device, stats, error } = state;
+  const name = device.display_name || device.device_id;
+  const rows = stats?.rows;
+
+  return (
+    <div
+      onClick={(e) => {
+        e.stopPropagation();
+        onCancel();
+      }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(420px, 100%)",
+          background: "#161b22",
+          border: "1px solid #2a313c",
+          borderRadius: 8,
+          padding: 20,
+          color: "#e6edf3",
+        }}
+      >
+        <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>delete “{name}”?</h3>
+        <div style={{ fontSize: 11, fontFamily: "monospace", opacity: 0.5 }}>
+          {device.device_id}
+        </div>
+
+        <p style={{ fontSize: 13, opacity: 0.8, margin: "12px 0 0" }}>
+          {stats == null
+            ? "counting stored readings…"
+            : rows > 0
+              ? `${rows.toLocaleString()} stored readings (${formatTs(stats.first_ts)} – ${formatTs(stats.last_ts)})`
+              : "no stored readings."}
+        </p>
+        {rows > 0 && (
+          <p style={{ fontSize: 12, opacity: 0.6, margin: "8px 0 0" }}>
+            if you keep the readings, this device reappears in the list — it is
+            rebuilt from stored telemetry. a sensor that still publishes comes
+            back either way.
+          </p>
+        )}
+        {error && (
+          <p style={{ fontSize: 13, color: "#f85149", margin: "8px 0 0" }}>{error}</p>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            marginTop: 16,
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+          }}
+        >
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            style={dialogButton("transparent", "#e6edf3")}
+          >
+            cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(false)}
+            disabled={busy}
+            style={dialogButton("#21262d", "#e6edf3")}
+          >
+            delete, keep readings
+          </button>
+          {rows > 0 && (
+            <button
+              type="button"
+              onClick={() => onDelete(true)}
+              disabled={busy}
+              style={dialogButton("#da3633", "#fff")}
+            >
+              delete incl. {rows.toLocaleString()} readings
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function dialogButton(bg, color) {
+  return {
+    background: bg,
+    color,
+    border: "1px solid #2a313c",
+    borderRadius: 6,
+    padding: "6px 12px",
+    fontSize: 13,
+    cursor: "pointer",
+  };
 }

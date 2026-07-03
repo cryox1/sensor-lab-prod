@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR, { mutate } from "swr";
 import { getApiBase, writeHeaders } from "../_lib/api";
 import { displayNameFor } from "../_lib/displayName";
+import GroupBoard from "./GroupBoard";
 
 const fetcher = (url) => fetch(url).then((r) => r.json());
 
@@ -19,6 +20,24 @@ export default function GroupsPage() {
 
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+
+  // Board vs classic dropdown-list view; persisted per browser. Nothing
+  // view-dependent renders until the stored choice is read, to avoid a
+  // hydration mismatch (same pattern as the `api` state above).
+  const [view, setView] = useState(null);
+  useEffect(() => {
+    setView(localStorage.getItem("groupsView") === "list" ? "list" : "board");
+  }, []);
+  function changeView(v) {
+    setView(v);
+    try {
+      localStorage.setItem("groupsView", v);
+    } catch {
+      // storage unavailable (private mode) — the toggle still works this session
+    }
+  }
+
+  const [assignError, setAssignError] = useState(null);
 
   const refresh = () => {
     if (groupsKey) mutate(groupsKey);
@@ -50,12 +69,27 @@ export default function GroupsPage() {
   }, [groups]);
 
   async function assignDevice(deviceId, groupId) {
-    await fetch(`${api}/devices/${encodeURIComponent(deviceId)}/group`, {
-      method: "PUT",
-      headers: writeHeaders(),
-      body: JSON.stringify({ group_id: groupId }),
-    });
-    refresh();
+    setAssignError(null);
+    // Optimistic: move the device immediately, reconcile with the server after.
+    if (groupsKey)
+      mutate(groupsKey, (current) => moveDevice(current, deviceId, groupId), {
+        revalidate: false,
+      });
+    try {
+      const res = await fetch(`${api}/devices/${encodeURIComponent(deviceId)}/group`, {
+        method: "PUT",
+        headers: writeHeaders(),
+        body: JSON.stringify({ group_id: groupId }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      refresh();
+    } catch (err) {
+      if (groupsKey) mutate(groupsKey); // revert to server truth
+      const dev = (devices ?? []).find((d) => d.device_id === deviceId);
+      setAssignError(
+        `could not move ${dev ? displayNameFor(dev) : deviceId} (${err.message}) — check API / write token`
+      );
+    }
   }
 
   const sortedDevices = (devices ?? [])
@@ -103,27 +137,68 @@ export default function GroupsPage() {
       </section>
 
       <section style={{ marginTop: 28 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 8px" }}>
-          your groups
-        </h2>
-        {(groups?.length ?? 0) === 0 ? (
-          <p style={{ opacity: 0.6, fontSize: 14 }}>no groups yet.</p>
-        ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-            {groups.map((g) => (
-              <GroupRow
-                key={g.id}
-                api={api}
-                group={g}
-                onChanged={() => {
-                  if (groupsKey) mutate(groupsKey);
-                }}
-              />
-            ))}
-          </ul>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+            margin: "0 0 8px",
+          }}
+        >
+          <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+            your groups
+          </h2>
+          {view && <ViewToggle value={view} onChange={changeView} />}
+        </div>
+        {assignError && (
+          <p style={{ color: "#f85149", fontSize: 13, margin: "0 0 8px" }}>
+            {assignError}
+          </p>
         )}
+        {view === "board" && (
+          <>
+            <p style={{ opacity: 0.6, fontSize: 13, margin: "0 0 12px" }}>
+              drag a sensor chip onto a group — or onto “ungrouped” to unassign it.
+            </p>
+            <GroupBoard
+              groups={groups ?? []}
+              devices={sortedDevices}
+              groupOf={groupOf}
+              onAssign={assignDevice}
+              renderGroupHeader={(g) => (
+                <GroupHeader
+                  api={api}
+                  group={g}
+                  onChanged={() => {
+                    if (groupsKey) mutate(groupsKey);
+                  }}
+                />
+              )}
+            />
+          </>
+        )}
+        {view === "list" &&
+          ((groups?.length ?? 0) === 0 ? (
+            <p style={{ opacity: 0.6, fontSize: 14 }}>no groups yet.</p>
+          ) : (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {groups.map((g) => (
+                <GroupRow
+                  key={g.id}
+                  api={api}
+                  group={g}
+                  onChanged={() => {
+                    if (groupsKey) mutate(groupsKey);
+                  }}
+                />
+              ))}
+            </ul>
+          ))}
       </section>
 
+      {view === "list" && (
       <section style={{ marginTop: 28 }}>
         <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 8px" }}>
           assign sensors
@@ -187,11 +262,81 @@ export default function GroupsPage() {
           </ul>
         )}
       </section>
+      )}
     </main>
   );
 }
 
+// Optimistic-update helper: a new groups array with the device removed from
+// every group's device_ids and appended to the target (null = ungrouped).
+function moveDevice(groups, deviceId, groupId) {
+  return (groups ?? []).map((g) => {
+    const ids = g.device_ids.filter((id) => id !== deviceId);
+    if (g.id === groupId) ids.push(deviceId);
+    return { ...g, device_ids: ids };
+  });
+}
+
+// board ↔ list segmented control, mirroring GroupModeToggle on the group
+// overview page.
+function ViewToggle({ value, onChange }) {
+  const views = [
+    { value: "board", label: "board" },
+    { value: "list", label: "list" },
+  ];
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        gap: 4,
+        background: "#161b22",
+        border: "1px solid #2a313c",
+        borderRadius: 999,
+        padding: 4,
+      }}
+    >
+      {views.map((v) => {
+        const active = v.value === value;
+        return (
+          <button
+            key={v.value}
+            type="button"
+            onClick={() => onChange(v.value)}
+            style={{
+              border: "none",
+              background: active ? "#2a313c" : "transparent",
+              color: active ? "#e6e6e6" : "#9ba3af",
+              padding: "6px 12px",
+              borderRadius: 999,
+              fontSize: 13,
+              cursor: "pointer",
+              fontWeight: active ? 600 : 400,
+            }}
+          >
+            {v.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function GroupRow({ api, group, onChanged }) {
+  return (
+    <li
+      style={{
+        padding: "10px 0",
+        borderBottom: "1px solid #2a313c",
+      }}
+    >
+      <GroupHeader api={api} group={group} onChanged={onChanged} />
+    </li>
+  );
+}
+
+// The interactive part of a group row (name/rename/delete/overview-link),
+// shared between the list view (inside GroupRow) and the board containers.
+function GroupHeader({ api, group, onChanged }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(group.name);
   const [busy, setBusy] = useState(false);
@@ -237,13 +382,11 @@ function GroupRow({ api, group, onChanged }) {
   }
 
   return (
-    <li
+    <div
       style={{
         display: "flex",
         alignItems: "center",
         gap: 10,
-        padding: "10px 0",
-        borderBottom: "1px solid #2a313c",
         flexWrap: "wrap",
       }}
     >
@@ -296,7 +439,7 @@ function GroupRow({ api, group, onChanged }) {
           </>
         )}
       </span>
-    </li>
+    </div>
   );
 }
 

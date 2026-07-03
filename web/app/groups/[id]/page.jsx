@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import Chart from "../../_components/Chart";
+import ExportCsvButton from "../../_components/ExportCsvButton";
 import TimeRangeSelector from "../../_components/TimeRangeSelector";
 import InfoTooltip from "../../_components/InfoTooltip";
 import { getApiBase } from "../../_lib/api";
@@ -218,6 +219,11 @@ export default function GroupOverviewPage({ params }) {
           </label>
           <GroupModeToggle value={mode} onChange={setMode} />
           {!isLive && <TimeRangeSelector value={range.label} onChange={setRange} />}
+          <ExportCsvButton
+            devices={devices}
+            scope={group ? group.name : `group-${groupId}`}
+            rangeLabel={isLive ? "live-5min" : range.label}
+          />
         </div>
       </div>
 
