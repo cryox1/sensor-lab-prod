@@ -1,7 +1,7 @@
 // NEO-6M GPS on an ESP32-C3 board with an onboard 0.42" 72x40 OLED.
 // Reads location over UART, shows it on the OLED, and publishes it to the
 // sensor-lab stack over MQTT — same pipeline as the ESP8266 sketches
-// (MQTT -> ingest -> PostgreSQL).
+// (MQTT -> bridge -> Kafka -> tsdb-writer -> TimescaleDB).
 //
 // Differences from the other sketches in this repo:
 //   * ESP32-C3, not ESP8266: <WiFi.h> and WiFi.config() takes TWO DNS args.
@@ -30,7 +30,7 @@
 #include <TinyGPS++.h>
 #include <time.h>
 
-// ---- WiFi + MQTT broker — copy secrets.h.example to this folder as secrets.h and fill in ----
+// ---- WiFi + MQTT — copy secrets.h.example to this folder as secrets.h and fill in ----
 #include "secrets.h"   // WIFI_SSID, WIFI_PASS, MQTT_HOST (gitignored)
 
 // ---- Onboard 0.42" OLED: SSD1306 72x40 on I2C SDA=GPIO5 / SCL=GPIO6, addr 0x3C ----
@@ -45,7 +45,7 @@
 // ---- Publish cadence ----
 #define READ_INTERVAL  2000
 
-// ---- Static IPv4 (default DHCP may not match your LAN's subnet) ----
+// ---- Static IPv4 (default DHCP can't reach your LAN's subnet) ----
 // Comment out USE_STATIC_IP to fall back to DHCP.
 #define USE_STATIC_IP
 IPAddress STATIC_IP   (10, 0, 0, 67);   // unused address on your LAN

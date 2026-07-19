@@ -51,6 +51,15 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      # Blitzortung.org strike consumer — stays dark unless HOME_LAT/LON are
+      # set in .env. On the server, add these lines there by hand (deploy.sh
+      # never syncs compose/.env — see AGENTS.md).
+      BLITZ_HOME_LAT: ${BLITZ_HOME_LAT:-}
+      BLITZ_HOME_LON: ${BLITZ_HOME_LON:-}
+      BLITZ_RADIUS_KM: ${BLITZ_RADIUS_KM:-250}
+      BLITZ_MQTT_HOST: ${BLITZ_MQTT_HOST:-blitzortung.ha.sed.pl}
+      BLITZ_MQTT_PORT: ${BLITZ_MQTT_PORT:-1883}
+      BLITZ_RETENTION_DAYS: ${BLITZ_RETENTION_DAYS:-0}
     depends_on:
       mosquitto:
         condition: service_healthy
@@ -71,6 +80,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       API_WRITE_TOKEN: ${API_WRITE_TOKEN:-}
+      # GET /strikes meta (map circle + feature-off signal). Must match ingest.
+      BLITZ_HOME_LAT: ${BLITZ_HOME_LAT:-}
+      BLITZ_HOME_LON: ${BLITZ_HOME_LON:-}
+      BLITZ_RADIUS_KM: ${BLITZ_RADIUS_KM:-250}
     ports:
       - "8000:8000"
     depends_on:

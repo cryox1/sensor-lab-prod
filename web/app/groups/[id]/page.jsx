@@ -50,6 +50,15 @@ export default function GroupOverviewPage({ params }) {
   const [range, setRange] = useState(RANGES[2]); // 24h
   const [includeHidden, setIncludeHidden] = useState(false);
   const [showThresholds, setShowThresholds] = useState(true);
+  // Legend toggles: device_ids clicked off in the legend (session-only).
+  const [deselected, setDeselected] = useState(() => new Set());
+  const toggleDeselected = (id) =>
+    setDeselected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const offsets = useOffsets();
   const [api, setApi] = useState(null);
   useEffect(() => {
@@ -168,8 +177,13 @@ export default function GroupOverviewPage({ params }) {
     }));
   }, [isLive, members, data, livePoints, nowTick]);
 
+  // Legend clicks hide series from the charts/CSV but keep `devices` (and the
+  // positional colors) intact so the remaining lines don't reshuffle.
+  const visibleDevices = devices.filter((d) => !deselected.has(d.device_id));
+  const allDeselected = devices.length > 0 && visibleDevices.length === 0;
+
   const hasAnyPoints = devices.some((d) => d.points.length > 0);
-  const liveCount = devices.reduce((n, d) => n + d.points.length, 0);
+  const liveCount = visibleDevices.reduce((n, d) => n + d.points.length, 0);
   const formatX = isLive ? formatLiveX : pickFormatX(range.hours);
 
   // groups loaded but no matching id -> 404-ish state.
@@ -220,7 +234,7 @@ export default function GroupOverviewPage({ params }) {
           <GroupModeToggle value={mode} onChange={setMode} />
           {!isLive && <TimeRangeSelector value={range.label} onChange={setRange} />}
           <ExportCsvButton
-            devices={devices}
+            devices={visibleDevices}
             scope={group ? group.name : `group-${groupId}`}
             rangeLabel={isLive ? "live-5min" : range.label}
           />
@@ -261,11 +275,31 @@ export default function GroupOverviewPage({ params }) {
             borderRadius: 8,
           }}
         >
-          {members.map((d) => (
-            <span key={d.device_id} style={{ color: d.color, fontSize: 13 }}>
-              ● {d.name}
-            </span>
-          ))}
+          {members.map((d) => {
+            const off = deselected.has(d.device_id);
+            return (
+              <button
+                key={d.device_id}
+                type="button"
+                onClick={() => toggleDeselected(d.device_id)}
+                aria-pressed={!off}
+                title={off ? "show in charts" : "hide from charts"}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  padding: 0,
+                  font: "inherit",
+                  fontSize: 13,
+                  cursor: "pointer",
+                  color: d.color,
+                  opacity: off ? 0.35 : 1,
+                  textDecoration: off ? "line-through" : "none",
+                }}
+              >
+                ● {d.name}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -283,6 +317,10 @@ export default function GroupOverviewPage({ params }) {
             assign some
           </a>
         </p>
+      ) : allDeselected ? (
+        <p style={{ opacity: 0.7, marginTop: 24 }}>
+          all sensors toggled off — click a name above to show them again.
+        </p>
       ) : !isLive && isLoading && !data ? (
         <p style={{ opacity: 0.7, marginTop: 24 }}>loading…</p>
       ) : !hasAnyPoints ? (
@@ -294,7 +332,7 @@ export default function GroupOverviewPage({ params }) {
       ) : (
         <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 32 }}>
           {METRICS.map((metric) => {
-            const series = devices
+            const series = visibleDevices
               .map((d) => ({
                 label: d.name,
                 color: d.color,

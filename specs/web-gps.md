@@ -29,13 +29,29 @@
   ("power on a GPS sensor and wait for a fix"). Hidden devices are *not*
   filtered out on this page.
 
+- **Blitzortung lightning overlay** (only when the backend is configured —
+  `GET /strikes` returns `home != null`): strikes of the last 60 min as
+  amber `CircleMarker`s (#e3b341/#f0c000) with an age fade (newer = bigger
+  and more opaque), a dashed circle showing the `radius_km` coverage around
+  home, a "⚡ lightning (last 60 min)" toggle in the header (default on), a
+  legend entry `⚡ N strikes · Blitzdaten: Blitzortung.org`, and the required
+  Blitzortung.org attribution added to Leaflet's attribution control. Data:
+  `GET /strikes?minutes=60` SWR-polled every 15 s (backstop + garbage
+  collection) merged with `/ws/live` frames of `type === "strike"` (instant
+  markers, capped at 500, deduped on `ts|lat|lon`). The strike window is
+  fixed at 60 min, independent of the history range selector. `FitBounds`
+  ignores strikes and home — it fits sensor points only; home is used solely
+  as fallback center (zoom 7) when no sensor has a fix, so the map also
+  renders during a storm with zero GPS devices.
+
 ## Requirements
 
 None yet.
 
 ## Non-goals
 
-- No live/WebSocket tracking — positions come only from polled history.
+- No live/WebSocket tracking of **sensor positions** — those come only from
+  polled history (strikes are the exception, see overlay above).
 - No line charts for GPS fields; `GPS_METRICS` are deliberately kept out of
   `METRICS` so they don't appear on the overview/group chart pages.
 

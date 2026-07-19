@@ -13,10 +13,11 @@ API validation in `api/main.py` (`_clean_thresholds`).
   inside the visible y-range.
 - **Data:** `GET /thresholds`, SWR-polled every 30 s. The response maps
   `metric_key → [{value,label,color}, …]` for customized metrics only.
-- **Editor:** one card per entry in `METRICS` (8 metrics), seeded with
+- **Editor:** one card per entry in `METRICS` (12 metrics), seeded with
   `effectiveThresholds(key, overrides)` — the saved override if present, else
   `DEFAULT_THRESHOLDS[key]` (temp, humidity, eCO₂, TVOC, AQI, battery have
-  built-in defaults; heat index and pressure default to none). A badge shows
+  built-in defaults; heat index, pressure, gas and the three lightning
+  metrics default to none). A badge shows
   "customized" (override exists, even an empty one) vs "default". The draft is
   local state, remounted/reseeded when the persisted override changes.
 - **Per line:** number input (step 0.1 when the metric has decimal digits, else
@@ -33,7 +34,7 @@ API validation in `api/main.py` (`_clean_thresholds`).
   metric is customized) sends `DELETE /thresholds/{metric_key}`, reverting to
   `DEFAULT_THRESHOLDS`.
 - **API validation** (server-side, `api/main.py`): metric key must be one of
-  the 8 known `THRESHOLD_METRICS` (404 otherwise), at most 12 lines per metric
+  the 12 known `THRESHOLD_METRICS` (404 otherwise), at most 12 lines per metric
   (400), color must match `^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$` (400), labels
   are trimmed and truncated to 24 chars, and lines are stored sorted ascending
   by value (JSONB, one row per metric). Writes require the write token when

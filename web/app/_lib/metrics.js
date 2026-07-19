@@ -15,6 +15,20 @@ export const METRICS = [
     description: "Battery voltage of a deep-sleep node, read via an on-board resistor divider. A single LiPo cell is ~4.2 V full and ~3.3 V nearly empty — the downward slope tracks remaining runtime." },
   { key: "pressure_hpa", label: "pressure",    unit: "hPa", color: "#79c0ff", digits: 1,
     description: "Atmospheric (barometric) pressure in hectopascals, from a BME280. ~1013 hPa is average sea level; the reading drops with altitude and tends to dip before stormy weather." },
+  { key: "gas_kohm",     label: "gas",         unit: "kΩ",  color: "#ffa657", digits: 0,
+    description: "Raw gas-sensor resistance from a BME680's heated MOX element, in kilohms. Higher means cleaner air (fewer VOCs); it's a relative trend per sensor, not a calibrated air-quality index." },
+  { key: "lightning_km",     label: "storm distance", unit: "km", color: "#e3b341", digits: 0,
+    description: "Estimated distance to the storm front (not the individual strike) from an AS3935 lightning sensor. 1 km means overhead, 63 means out of range; only present on publishes that contained strikes. Bucketed as the minimum (closest approach)." },
+  { key: "lightning_energy", label: "strike energy",  unit: "",   color: "#a371f7", digits: 0,
+    description: "Raw, unitless strike-intensity figure from the AS3935 (peak of the strikes folded into a publish). A relative indicator only — not joules. Bucketed as the maximum." },
+  { key: "lightning_count",  label: "strikes",        unit: "",   color: "#f85149", digits: 0,
+    description: "Lightning strikes detected since the node's previous publish. 0 means the sensor was listening and heard nothing. Bucketed as the sum, so bucket values are storm totals." },
+  { key: "iaq",          label: "IAQ",         unit: "",    color: "#f778ba", digits: 0,
+    description: "Bosch BSEC static indoor-air-quality index (0–500) computed from a BME680's gas response; lower is better (0–50 excellent, >200 heavily polluted). Only meaningful once the on-node calibration reaches accuracy 3 — see iaq_acc in the latest reading." },
+  { key: "co2_eq_ppm",   label: "CO₂eq",       unit: "ppm", color: "#56d364", digits: 0,
+    description: "BSEC's CO₂-equivalent estimate (ppm) derived from VOC levels, assuming humans are the VOC source. Comparable scale to eCO₂: ~400–500 ppm is fresh air." },
+  { key: "bvoc_eq_ppm",  label: "bVOC",        unit: "ppm", color: "#bc8cff", digits: 2,
+    description: "BSEC's breath-VOC-equivalent estimate (ppm): the VOC concentration that would produce the observed gas response. ~0.5 ppm is clean indoor air." },
 ];
 
 export const METRICS_BY_KEY = Object.fromEntries(METRICS.map((m) => [m.key, m]));
@@ -64,6 +78,21 @@ export const DEFAULT_THRESHOLDS = {
   batt_v: [
     { value: 3.0, label: "critical", color: "#f85149" }, // LiPo near cutoff
     { value: 3.3, label: "low",      color: "#f0883e" }, // getting low, recharge soon
+  ],
+  iaq: [
+    // Bosch BSEC IAQ bands: 0–50 excellent, 51–100 good, 101–150 lightly polluted…
+    { value: 100, label: "polluted", color: "#d29922" },
+    { value: 200, label: "heavy",    color: "#f0883e" },
+    { value: 300, label: "severe",   color: "#f85149" },
+  ],
+  co2_eq_ppm: [
+    { value: 1000, label: "stuffy", color: "#d29922" }, // same bands as eco2_ppm
+    { value: 2000, label: "poor",   color: "#f0883e" },
+    { value: 5000, label: "bad",    color: "#f85149" },
+  ],
+  bvoc_eq_ppm: [
+    { value: 1, label: "elevated", color: "#d29922" }, // clean indoor air is ~0.5 ppm
+    { value: 3, label: "high",     color: "#f85149" },
   ],
 };
 

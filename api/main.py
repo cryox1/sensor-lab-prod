@@ -14,6 +14,7 @@ DELETE /groups/{id}                    -- delete a group (members are unassigned
 GET  /history?device_id=...            -- recent telemetry from Postgres
 GET  /history-all                      -- recent telemetry for every device
 GET  /latest                           -- newest stored row per device (any age)
+GET  /strikes                          -- recent Blitzortung.org strikes + home meta
 GET  /thresholds                       -- user-customized chart threshold lines
 PUT  /thresholds/{metric}              -- set threshold lines for a metric
 DELETE /thresholds/{metric}            -- revert a metric to built-in defaults
@@ -47,6 +48,12 @@ log = logging.getLogger("api")
 MQTT_HOST = os.environ.get("MQTT_HOST", "mosquitto")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 MQTT_TOPIC = "sensors/+/+/telemetry"
+# Blitzortung.org strikes republished by ingest's BlitzortungConsumer.
+# `or` instead of get(k, default): compose passes "" for unset ${VAR:-}.
+MQTT_STRIKE_TOPIC = "blitzortung/strikes"
+BLITZ_HOME_LAT = os.environ.get("BLITZ_HOME_LAT") or None
+BLITZ_HOME_LON = os.environ.get("BLITZ_HOME_LON") or None
+BLITZ_RADIUS_KM = float(os.environ.get("BLITZ_RADIUS_KM") or "250")
 
 # Comma-separated allowed CORS origins. Default "*" preserves previous behavior;
 # tighten to a real host on Tailscale/LAN if you care.
@@ -108,6 +115,7 @@ class LiveHub:
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         client.subscribe(MQTT_TOPIC, qos=0)
+        client.subscribe(MQTT_STRIKE_TOPIC, qos=0)
 
     def _on_message(self, client, userdata, msg):
         # Validate just like the ingest path so the live feed only carries
@@ -116,7 +124,12 @@ class LiveHub:
             payload = json.loads(msg.payload.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
-        if "device_id" not in payload or "ts" not in payload:
+        if msg.topic == MQTT_STRIKE_TOPIC:
+            # Strike broadcasts carry type/ts/lat/lon/distance_km, no device_id;
+            # clients tell them apart via payload.type === "strike".
+            if "lat" not in payload or "lon" not in payload:
+                return
+        elif "device_id" not in payload or "ts" not in payload:
             return
         text = msg.payload.decode("utf-8")
         if self.loop is not None:
@@ -202,6 +215,49 @@ async def lifespan(app: FastAPI):
             # existing volume hasn't migrated yet (writer adds these too).
             await cur.execute(
                 "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS pressure_hpa DOUBLE PRECISION"
+            )
+            await cur.execute(
+                "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS gas_kohm DOUBLE PRECISION"
+            )
+            await cur.execute(
+                "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS lightning_km SMALLINT"
+            )
+            await cur.execute(
+                "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS lightning_energy INTEGER"
+            )
+            await cur.execute(
+                "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS lightning_count INTEGER"
+            )
+            await cur.execute(
+                "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS iaq DOUBLE PRECISION"
+            )
+            await cur.execute(
+                "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS iaq_acc SMALLINT"
+            )
+            await cur.execute(
+                "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS co2_eq_ppm DOUBLE PRECISION"
+            )
+            await cur.execute(
+                "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS bvoc_eq_ppm DOUBLE PRECISION"
+            )
+            # Blitzortung strikes: ingest owns the writer migration, but api may
+            # start first after a joint deploy — same race guard as above.
+            await cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lightning_strikes (
+                  ts          TIMESTAMPTZ      NOT NULL,
+                  lat         DOUBLE PRECISION NOT NULL,
+                  lon         DOUBLE PRECISION NOT NULL,
+                  distance_km DOUBLE PRECISION NOT NULL,
+                  delay_s     DOUBLE PRECISION,
+                  received_at TIMESTAMPTZ      NOT NULL DEFAULT now(),
+                  PRIMARY KEY (ts, lat, lon)
+                )
+                """
+            )
+            await cur.execute(
+                "CREATE INDEX IF NOT EXISTS lightning_strikes_ts_idx"
+                " ON lightning_strikes (ts DESC)"
             )
     log.info("postgres pool ready")
     yield
@@ -504,7 +560,8 @@ async def set_device_group(device_id: str, body: DeviceGroupBody):
 # Metrics that may carry threshold lines — matches the frontend METRICS keys.
 THRESHOLD_METRICS = {
     "temp_c", "humidity", "heat_index_c", "eco2_ppm", "tvoc_ppb", "aqi", "batt_v",
-    "pressure_hpa",
+    "pressure_hpa", "gas_kohm", "lightning_km", "lightning_energy", "lightning_count",
+    "iaq", "co2_eq_ppm", "bvoc_eq_ppm",
 }
 THRESHOLD_LABEL_MAX = 24
 MAX_THRESHOLDS_PER_METRIC = 12
@@ -597,6 +654,14 @@ async def history(
                 # invent phantom midpoints on a moving track). The plain-Postgres
                 # `(array_agg(col ORDER BY ts DESC))[1]` returns the value at the
                 # row with the max ts — same semantics as Timescale's last().
+                # Lightning columns mirror the firmware's own burst-folding and
+                # must NOT be "simplified" to AVG: lightning_count is a
+                # per-publish delta (AVG would understate storm totals -> SUM),
+                # lightning_km is min storm-front distance (closest approach),
+                # lightning_energy is peak raw intensity (MAX).
+                # iaq_acc is a BSEC calibration level (0-3), not a measurement:
+                # MAX keeps the best state seen in the bucket instead of an
+                # averaged non-level like 2.4.
                 await cur.execute(
                     """
                     SELECT date_bin(make_interval(secs => %s), ts, TIMESTAMPTZ 'epoch') AS bucket,
@@ -612,7 +677,15 @@ async def history(
                            (array_agg(sats      ORDER BY ts DESC))[1] AS sats,
                            (array_agg(speed_kmh ORDER BY ts DESC))[1] AS speed_kmh,
                            AVG(batt_v)            AS batt_v,
-                           AVG(pressure_hpa)      AS pressure_hpa
+                           AVG(pressure_hpa)      AS pressure_hpa,
+                           AVG(gas_kohm)          AS gas_kohm,
+                           MIN(lightning_km)               AS lightning_km,
+                           MAX(lightning_energy)           AS lightning_energy,
+                           SUM(lightning_count)::INTEGER   AS lightning_count,
+                           AVG(iaq)               AS iaq,
+                           MAX(iaq_acc)           AS iaq_acc,
+                           AVG(co2_eq_ppm)        AS co2_eq_ppm,
+                           AVG(bvoc_eq_ppm)       AS bvoc_eq_ppm
                     FROM telemetry
                     WHERE device_id = %s AND ts >= %s
                     GROUP BY bucket
@@ -624,7 +697,9 @@ async def history(
                 await cur.execute(
                     """
                     SELECT ts, temp_c, humidity, heat_index_c, eco2_ppm, tvoc_ppb, aqi,
-                           lat, lon, alt_m, sats, speed_kmh, batt_v, pressure_hpa
+                           lat, lon, alt_m, sats, speed_kmh, batt_v, pressure_hpa, gas_kohm,
+                           lightning_km, lightning_energy, lightning_count,
+                           iaq, iaq_acc, co2_eq_ppm, bvoc_eq_ppm
                     FROM telemetry
                     WHERE device_id = %s AND ts >= %s
                     ORDER BY ts ASC
@@ -648,6 +723,14 @@ async def history(
             "speed_kmh": r[11],
             "batt_v": r[12],
             "pressure_hpa": r[13],
+            "gas_kohm": r[14],
+            "lightning_km": r[15],
+            "lightning_energy": r[16],
+            "lightning_count": r[17],
+            "iaq": r[18],
+            "iaq_acc": r[19],
+            "co2_eq_ppm": r[20],
+            "bvoc_eq_ppm": r[21],
         }
         for r in rows
     ]
@@ -662,7 +745,8 @@ async def history_all(
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             if bucket_seconds:
-                # See /history: GPS columns keep the latest real fix per bucket.
+                # See /history: GPS columns keep the latest real fix per bucket;
+                # lightning columns fold as SUM/MIN/MAX, not AVG.
                 await cur.execute(
                     """
                     SELECT device_id,
@@ -679,7 +763,15 @@ async def history_all(
                            (array_agg(sats      ORDER BY ts DESC))[1] AS sats,
                            (array_agg(speed_kmh ORDER BY ts DESC))[1] AS speed_kmh,
                            AVG(batt_v)            AS batt_v,
-                           AVG(pressure_hpa)      AS pressure_hpa
+                           AVG(pressure_hpa)      AS pressure_hpa,
+                           AVG(gas_kohm)          AS gas_kohm,
+                           MIN(lightning_km)               AS lightning_km,
+                           MAX(lightning_energy)           AS lightning_energy,
+                           SUM(lightning_count)::INTEGER   AS lightning_count,
+                           AVG(iaq)               AS iaq,
+                           MAX(iaq_acc)           AS iaq_acc,
+                           AVG(co2_eq_ppm)        AS co2_eq_ppm,
+                           AVG(bvoc_eq_ppm)       AS bvoc_eq_ppm
                     FROM telemetry
                     WHERE ts >= %s
                     GROUP BY device_id, bucket
@@ -691,7 +783,9 @@ async def history_all(
                 await cur.execute(
                     """
                     SELECT device_id, ts, temp_c, humidity, heat_index_c, eco2_ppm, tvoc_ppb, aqi,
-                           lat, lon, alt_m, sats, speed_kmh, batt_v, pressure_hpa
+                           lat, lon, alt_m, sats, speed_kmh, batt_v, pressure_hpa, gas_kohm,
+                           lightning_km, lightning_energy, lightning_count,
+                           iaq, iaq_acc, co2_eq_ppm, bvoc_eq_ppm
                     FROM telemetry
                     WHERE ts >= %s
                     ORDER BY device_id ASC, ts ASC
@@ -702,7 +796,9 @@ async def history_all(
 
     by_device: dict[str, list[dict]] = {}
     for (device_id, ts, temp_c, humidity, heat_index_c, eco2_ppm, tvoc_ppb, aqi,
-         lat, lon, alt_m, sats, speed_kmh, batt_v, pressure_hpa) in rows:
+         lat, lon, alt_m, sats, speed_kmh, batt_v, pressure_hpa, gas_kohm,
+         lightning_km, lightning_energy, lightning_count,
+         iaq, iaq_acc, co2_eq_ppm, bvoc_eq_ppm) in rows:
         by_device.setdefault(device_id, []).append({
             "ts": ts.isoformat(),
             "temp_c": temp_c,
@@ -718,6 +814,14 @@ async def history_all(
             "speed_kmh": speed_kmh,
             "batt_v": batt_v,
             "pressure_hpa": pressure_hpa,
+            "gas_kohm": gas_kohm,
+            "lightning_km": lightning_km,
+            "lightning_energy": lightning_energy,
+            "lightning_count": lightning_count,
+            "iaq": iaq,
+            "iaq_acc": iaq_acc,
+            "co2_eq_ppm": co2_eq_ppm,
+            "bvoc_eq_ppm": bvoc_eq_ppm,
         })
     return [{"device_id": d, "points": pts} for d, pts in by_device.items()]
 
@@ -735,7 +839,9 @@ async def latest():
                 """
                 SELECT DISTINCT ON (device_id)
                        device_id, ts, temp_c, humidity, heat_index_c,
-                       eco2_ppm, tvoc_ppb, aqi, batt_v, pressure_hpa
+                       eco2_ppm, tvoc_ppb, aqi, batt_v, pressure_hpa, gas_kohm,
+                       lightning_km, lightning_energy, lightning_count,
+                       iaq, iaq_acc, co2_eq_ppm, bvoc_eq_ppm
                 FROM telemetry
                 ORDER BY device_id, ts DESC
                 """
@@ -753,9 +859,57 @@ async def latest():
             "aqi": r[7],
             "batt_v": r[8],
             "pressure_hpa": r[9],
+            "gas_kohm": r[10],
+            "lightning_km": r[11],
+            "lightning_energy": r[12],
+            "lightning_count": r[13],
+            "iaq": r[14],
+            "iaq_acc": r[15],
+            "co2_eq_ppm": r[16],
+            "bvoc_eq_ppm": r[17],
         }
         for r in rows
     ]
+
+
+@app.get("/strikes")
+async def strikes(minutes: int = Query(60, ge=1, le=1440)):
+    # Recent Blitzortung.org strikes around home, ascending by time. `home` is
+    # null when the feature is unconfigured — the frontend's signal to hide the
+    # overlay entirely. Newest-first LIMIT caps monster storms; reversed so the
+    # client still gets ascending order.
+    since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT ts, lat, lon, distance_km
+                FROM lightning_strikes
+                WHERE ts >= %s
+                ORDER BY ts DESC
+                LIMIT 5000
+                """,
+                (since,),
+            )
+            rows = await cur.fetchall()
+    home = (
+        {"lat": float(BLITZ_HOME_LAT), "lon": float(BLITZ_HOME_LON)}
+        if BLITZ_HOME_LAT and BLITZ_HOME_LON
+        else None
+    )
+    return {
+        "home": home,
+        "radius_km": BLITZ_RADIUS_KM,
+        "strikes": [
+            {
+                "ts": r[0].isoformat(),
+                "lat": r[1],
+                "lon": r[2],
+                "distance_km": r[3],
+            }
+            for r in reversed(rows)
+        ],
+    }
 
 
 @app.websocket("/ws/live")

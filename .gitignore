@@ -1,4 +1,5 @@
 .env
+deploy/deploy.env
 firmware/*/secrets.h
 firmware/*/build/
 mosquitto/data/

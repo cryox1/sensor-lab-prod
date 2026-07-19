@@ -43,6 +43,9 @@ export default function Page() {
   const offsets = useOffsets();
 
   useLiveSocket((m) => {
+    // Strike broadcasts (type: "strike") carry no device_id — without this
+    // guard each one would create a phantom "undefined" sensor card.
+    if (!m || typeof m.device_id !== "string") return;
     setLive((prev) => ({
       ...prev,
       [m.device_id]: { ...m, received_at: Date.now() },

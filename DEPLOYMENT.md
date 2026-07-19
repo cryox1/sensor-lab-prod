@@ -74,8 +74,9 @@ goes at the top of the `.ino`.
 ## Answer → location map (quick reference)
 
 - `SENSOR_LAB_HOST`, `SENSOR_LAB_USER`, `SENSOR_LAB_SSH_KEY`, `SENSOR_LAB_REMOTE_DIR`
-  → environment when running `deploy/deploy.sh` (or edit the fallbacks at the top of that
-  script).
+  → environment when running `deploy/deploy.sh`, or put them in `deploy/deploy.env`
+  (gitignored — the script sources it automatically), or edit the fallbacks at the top
+  of the script.
 - `POSTGRES_PASSWORD`, `POSTGRES_USER`, `POSTGRES_DB`, `SENSOR_DATA_DIR`, `CORS_ORIGINS`,
   `API_WRITE_TOKEN`, `WEB_API_WRITE_TOKEN`, `WEB_API_BASE`, `WEB_WS_URL`, `WEB_API_PORT`
   → `.env` (copy from `.env.example`; gitignored). On a remote deploy, the **server's**

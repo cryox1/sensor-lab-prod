@@ -14,7 +14,8 @@ Source: `web/app/overview/page.jsx`, `web/app/_components/Chart.jsx`,
   Device metadata from `GET /devices` and threshold overrides from
   `GET /thresholds`, both polled every 30 s.
 - **Charts:** one section per entry in `METRICS` (temp, humidity, heat index,
-  eCO₂, TVOC, AQI, battery, pressure), each a hand-rolled SVG line chart
+  eCO₂, TVOC, AQI, battery, pressure, gas, storm distance, strike energy,
+  strikes), each a hand-rolled SVG line chart
   (`Chart.jsx`, no chart library): 900×260 viewBox, 5 y/x gridline ticks, gapped
   paths on null values, hover crosshair snapping to the nearest data x with a
   multi-series tooltip. A metric's chart is skipped entirely when no device has

@@ -100,6 +100,28 @@ the remote.
 > - **Never** run `docker compose down -v`, `docker volume rm/prune`, or change a
 >   stateful service's volume definition against the server — any of these wipes the DB.
 
+## Blitzortung.org lightning overlay
+
+The `/gps` map can show live lightning strikes from the
+[Blitzortung.org](https://www.blitzortung.org) community network (private,
+non-commercial use; attribution is rendered on the map). `ingest` runs a second
+MQTT client against the public feed, keeps strikes within `BLITZ_RADIUS_KM` of
+home, stores them in `lightning_strikes`, and republishes them on the local
+broker so the api's `/ws/live` pushes them to the map instantly.
+
+The feature is **off until `BLITZ_HOME_LAT`/`BLITZ_HOME_LON` are set** (see
+`.env.example`). On the server this is a one-time **manual** step — deploy.sh
+never touches the server's compose/`.env` (AGENTS.md): append the `BLITZ_*`
+lines to `~/sensor-lab/.env`, hand-add the same env passthroughs to the
+`ingest` and `api` services in `~/sensor-lab/docker-compose.yml` (verify with
+`docker compose config` — no other diff), then `docker compose up -d ingest api`
+(never `down`, never touch `postgres`/`mosquitto`).
+
+Note: the AS3935 node (storm01) cannot *feed into* Blitzortung — their network
+locates strikes via GPS-timestamped time-of-arrival and needs their own
+System Blue hardware. This overlay is one-way: their located strikes next to
+our sensor's local detections.
+
 ## Firmware
 
 Arduino sketches for the ESP8266 devices live under `firmware/`. Each
@@ -113,14 +135,24 @@ requirement):
 - `firmware/neo6m_c3_oled/` — NEO-6M GPS + onboard 0.42″ OLED, device `gps01`, static IP `10.0.0.66`. **ESP32-C3, not ESP8266** (board package `esp32`, board "ESP32C3 Dev Module"; enable *USB CDC On Boot*). Publishes `lat`/`lon` (+ `alt_m`/`sats`/`speed_kmh`) once it has a fix. Uses `secrets.h` like the other sketches (`WIFI_SSID`/`WIFI_PASS`/`MQTT_HOST`). Wiring: GPS `VCC→3V3` (or 5V if your breakout regulates), `GND→GND`, **`TX→GPIO20`** (required), `RX→GPIO21` (optional). OLED is onboard on I²C `SDA=GPIO5`/`SCL=GPIO6`, addr `0x3C`.
 - `firmware/dht11_xiao_c6_deepsleep/` — DHT11 only, no display, battery deep-sleep (5-min wake → publish → sleep), device `xiao_c6`, static IP `10.0.0.63`. **Seeed XIAO ESP32-C6, not ESP8266** (board package `esp32` / Arduino-ESP32 core **≥3.0.0**, board "XIAO_ESP32C6"; enable *USB CDC On Boot*). The C6 wakes itself on the RTC timer, so **no `D0→RST` wire** is needed (unlike the ESP8266 deep-sleep boards). Uses `secrets.h`. Wiring: DHT11 `VCC→3V3`, `GND→GND`, **`DATA→D10 (GPIO18)`**; a 4.7–10 kΩ pull-up on `DATA` is needed for a bare 3-pin sensor (most blue DHT11 modules include it).
   - **Battery voltage reporting (live):** the BAT pads on this board are damaged, so the LiPo feeds the **`3V3` pin** directly (rail voltage = battery voltage). A 1:2 divider of **two equal ~100 kΩ resistors** from `3V3` → **`A0`/GPIO0** (no capacitor needed at 100 kΩ; A0 is free since the DHT is on D10, and on the C6 the boot strap is GPIO9 not GPIO0) feeds the ADC; the firmware reports `batt_v = analogReadMilliVolts(0) * 2` (averaged over 8 samples) in the JSON payload, charted as **battery (V)** on the dashboard. ⚠️ A full 4.2 V LiPo on `3V3` exceeds the C6's ~3.6 V max — keep the pack ≤3.6 V, or feed the `5V` pin instead (regulated, but browns out ~3.3–3.4 V). Full notes in `firmware/dht11_xiao_c6_deepsleep/ROADMAP.md`.
+- `firmware/bme280_xiao_c6_deepsleep/` — GY-BME280 (temp / humidity / **pressure**), battery deep-sleep, device `BME280_xiaoc6`, static IP `10.0.0.61`. Seeed XIAO ESP32-C6, same board setup as `dht11_xiao_c6_deepsleep`. Self-contained BME280 driver (no Adafruit_BME280 lib). Wiring: `VCC→3V3`, `GND→GND`, `SDA→D5 (GPIO23)`, `SCL→D6 (GPIO16)` — the sketch auto-tries the swapped orientation too.
+- `firmware/bme280_firebeetle2_c6_deepsleep/` — GY-BME280, battery deep-sleep, device `BME280_fbc6`, static IP `10.0.0.68`. **DFRobot FireBeetle 2 ESP32-C6 (DFR1075)** — board package `esp32`, board "DFRobot FireBeetle 2 ESP32-C6"; ⚠️ *USB CDC On Boot* defaults to **Disabled** on this board, enable it (or use FQBN `esp32:esp32:dfrobot_firebeetle2_esp32c6:CDCOnBoot=cdc`). Wiring: `VCC→3V3`, `GND→GND`, `SDA→GPIO19`, `SCL→GPIO20` (the silkscreened I²C pins). `batt_v` uses the board's **onboard** 1:2 VBAT divider on GPIO0 — no external resistors.
+- `firmware/bme680_firebeetle2_c6_deepsleep/` — DFRobot Gravity **BME680** (SEN0248: temp / humidity / pressure / **gas resistance**), battery deep-sleep, device `BME680_fbc6`, static IP `10.0.0.69`. Same FireBeetle 2 ESP32-C6 setup as above. Publishes `gas_kohm` (raw MOX resistance, higher = cleaner air; a relative trend, not calibrated IAQ — one heater shot per 5-min wake never reaches steady state; `air04` runs Bosch's BSEC2 IAQ instead, which needs always-on operation). Wiring via the sensor's Gravity cable: `+→3V3`, `−→GND`, `C→GPIO20 (SCL)`, `D→GPIO19 (SDA)`. Sensor I²C addr `0x77` (DFRobot default; sketch also probes `0x76`). Built to pair with `bme280_firebeetle2_c6_deepsleep` for a BME280-vs-BME680 accuracy comparison.
+- `firmware/ens160_aht21_firebeetle2_c6/` — ENS160 + AHT21 (eCO₂ / TVOC / AQI + temp / humidity / heat index), **always-on** (permanently USB-powered, no deep sleep — the ENS160 needs continuous STD-mode operation to give trustworthy readings), publishes every **30 s**, device `air03`, static IP `10.0.0.70`. Same FireBeetle 2 ESP32-C6 setup as above. Wiring: `VCC→3V3`, `GND→GND`, **`SDA→GPIO20`, `SCL→GPIO21`** — deliberately *not* the board's silkscreened default I²C pins; the combo board's CS pin is bridged HIGH → I²C mode, ENS160 addr `0x53`.
+- `firmware/bme680_ens160_aht21_firebeetle2_c6/` — DFRobot Gravity **BME680** (SEN0248) via **Bosch BSEC2** + **ENS160 + AHT21** combo, **always-on** indoor air node (permanently USB-powered, no deep sleep — the ENS160 needs continuous STD mode and BSEC2 samples the BME680 every 3 s for its IAQ calibration), publishes every **30 s**, device `air04`, static IP `10.0.0.73`. Same FireBeetle 2 ESP32-C6 setup as above. Publishes BSEC's calibrated **`iaq`** (static IAQ 0–500) + `iaq_acc` (calibration 0–3, persisted to NVS so reboots resume calibrated), `co2_eq_ppm`, `bvoc_eq_ppm`, heat-compensated `temp_c`/`humidity`, `pressure_hpa`, `gas_kohm`, plus the ENS160's `eco2_ppm`/`tvoc_ppb`/`aqi`. The BME680 runs in **SPI mode** via its 6 pads, wired **without** the Gravity cable: `VCC→3V3`, `GND→GND`, `SCLK→GPIO23 (SCK)`, `MOSI→GPIO22 (MOSI)`, `MISO→GPIO21 (MISO)`, `CS→GPIO18` (the board's silkscreened default SPI pins). ⚠️ I²C over those pads does **not** work — per the SEN0248 V1.0 schematic the MOSI pad passes through a unidirectional 74HC125 gate, so the sensor's ACKs can never reach the pad (the bidirectional SDA shifter sits only on the Gravity connector's D pin). ENS160 combo on the default I²C bus: `SDA→GPIO19`, `SCL→GPIO20`, ENS160 `0x53`, AHT21 `0x38`. ⚠️ The `bsec2` Arduino library ships no ESP32-C6 blob — copy `src/esp32c3` to `src/esp32c6` and add `esp32c6` to its `library.properties` `architectures=` (redo after a library update; the sketch header has the commands).
+- `firmware/bme680_bsec2_firebeetle2_c6/` — DFRobot Gravity **BME680** (SEN0248) via **Bosch BSEC2**, **always-on** single-sensor indoor air node (the ENS160-less sibling of `air04` — with BSEC2 the BME680 alone covers temp / humidity / pressure / IAQ / CO₂- and VOC-estimates), publishes every **30 s**, device `air05`, static IP `10.0.0.74`. Same FireBeetle 2 ESP32-C6 setup, same BSEC2 blob workaround, same SPI-pad wiring as `air04`: `VCC→3V3`, `GND→GND`, `SCLK→GPIO23`, `MOSI→GPIO22`, `MISO→GPIO21`, `CS→GPIO18`. Publishes `iaq`/`iaq_acc`/`co2_eq_ppm`/`bvoc_eq_ppm`, heat-compensated `temp_c`/`humidity`, `heat_index_c`, `pressure_hpa`, `gas_kohm`.
+- `firmware/bme280_as3935_firebeetle2_c6_deepsleep/` — DFRobot Gravity **AS3935 lightning sensor** (SEN0290) + optional GY-BME280 (the sketch runs fine without it), **indoor** deep-sleep storm node, device `storm01`, static IP `10.0.0.72` (`.71` is the CYD wall panel). ⚠️ *Hardware not yet assembled — compile-tested only; see `specs/hw-as3935.md`.* Same FireBeetle 2 ESP32-C6 setup as above, plus a second wake source: the AS3935 IRQ on **GPIO2** wakes the C6 from deep sleep on a strike (burst strikes within 60 s are accumulated in RTC memory, not published individually). Heartbeat every **600 s** with `batt_v` + `lightning_count` (0 when quiet) and climate when a BME280 is fitted. Power: USB or LiPo at the **BAT connector**; the outdoor-solar option (solar panel → DFR0579 Solar Power Manager Micro → LiPo → BAT connector; the DFR0579's 90 mA output can't feed WiFi TX peaks; remove the SEN0290's power LED) remains documented in the spec. Wiring: SEN0290 on the default bus (`VCC→3V3`, `GND→GND`, `SDA→GPIO19`, `SCL→GPIO20`), addr DIP `0x03` (both ON), `IRQ→GPIO2`; optional BME280 on the same bus.
 
-Board package: `esp8266` (NodeMCU 1.0 / ESP-12F) for all sketches **except** `neo6m_c3_oled` (ESP32-C3) and `dht11_xiao_c6_deepsleep` (ESP32-C6, needs Arduino-ESP32 core ≥3.0.0) which use `esp32`.
+Board package: `esp8266` (NodeMCU 1.0 / ESP-12F) for all sketches **except** `neo6m_c3_oled` (ESP32-C3), the `*_xiao_c6_deepsleep` sketches (Seeed XIAO ESP32-C6) and the `*_firebeetle2_c6*` sketches (DFRobot FireBeetle 2 ESP32-C6), which use `esp32` (Arduino-ESP32 core ≥3.0.0).
 
 Required Arduino libraries:
 - `DHT sensor library` (Adafruit) — DHT11 sketches
 - `Adafruit AHTX0` — ENS160+AHT21 sketches (covers AHT21)
 - `ScioSense_ENS160` — ENS160+AHT21 sketches
 - `PubSubClient` — all sketches
+- `Adafruit_BME680` (+ deps `Adafruit BusIO`, `Adafruit Unified Sensor`) — `bme680_firebeetle2_c6_deepsleep` only
+- `bsec2` (Bosch, + dep `BME68x Sensor library`) — `bme680_ens160_aht21_firebeetle2_c6` and `bme680_bsec2_firebeetle2_c6` (needs the esp32c6 blob workaround, see the air04 entry above)
+- `DFRobot_AS3935` — `bme280_as3935_firebeetle2_c6_deepsleep` only (SEN0290 lightning sensor)
 - `Adafruit_GFX` + `Adafruit_SSD1306` — HW-364A OLED variants only
 - `TinyGPSPlus` (Mikal Hart) + `U8g2` (olikraus) — `neo6m_c3_oled` only (U8g2 handles the 0.42″ 72×40 panel's offset; Adafruit_SSD1306 can't)
 
@@ -161,14 +193,25 @@ docker compose exec mosquitto mosquitto_pub \
 {"device_id":"gps01","ts":1714000000,"lat":48.1372,"lon":11.5756,"alt_m":519,"sats":9,"speed_kmh":0}
 {"device_id":"xiao_c6","ts":1714000000,"temp_c":22.5,"humidity":45,"heat_index_c":22.3,"batt_v":3.79}
 {"device_id":"BME280_xiaoc6","ts":1714000000,"temp_c":22.5,"humidity":45,"heat_index_c":22.3,"pressure_hpa":1013.2}
+{"device_id":"BME680_fbc6","ts":1714000000,"temp_c":22.5,"humidity":45,"heat_index_c":22.3,"pressure_hpa":1013.2,"gas_kohm":87.4,"batt_v":3.79}
+{"device_id":"air03","ts":1714000000,"temp_c":22.5,"humidity":45,"heat_index_c":22.3,"eco2_ppm":612,"tvoc_ppb":34,"aqi":2}
+{"device_id":"air04","ts":1714000000,"temp_c":22.5,"humidity":45,"heat_index_c":22.3,"pressure_hpa":1013.2,"gas_kohm":87.4,"iaq":52.3,"iaq_acc":3,"co2_eq_ppm":618,"bvoc_eq_ppm":0.52,"eco2_ppm":612,"tvoc_ppb":34,"aqi":2}
+{"device_id":"air05","ts":1714000000,"temp_c":22.5,"humidity":45,"heat_index_c":22.3,"pressure_hpa":1013.2,"gas_kohm":87.4,"iaq":52.3,"iaq_acc":3,"co2_eq_ppm":618,"bvoc_eq_ppm":0.52}
+{"device_id":"storm01","ts":1714000000,"temp_c":18.2,"pressure_hpa":998.4,"humidity":78,"heat_index_c":18.1,"lightning_km":12,"lightning_energy":174000,"lightning_count":3,"batt_v":3.92}
 ```
 
 Sensor-specific fields are optional — each device sends only what it
 measures. `device_id` and `ts` are the only required fields. Currently
 recognised optional fields: `temp_c`, `humidity`, `heat_index_c`,
 `eco2_ppm`, `tvoc_ppb`, `aqi`, `batt_v` (battery voltage of deep-sleep
-nodes), `pressure_hpa` (barometric pressure from BME280 nodes), and the
-GPS fields `lat`, `lon`, `alt_m`, `sats`, `speed_kmh` (see
+nodes), `pressure_hpa` (barometric pressure from BME280/BME680 nodes),
+`gas_kohm` (raw BME680 gas resistance in kΩ), the BSEC2 fields `iaq`
+(static IAQ 0–500), `iaq_acc` (calibration accuracy 0–3), `co2_eq_ppm`
+and `bvoc_eq_ppm` (BME680 nodes running Bosch's IAQ algorithm), the
+AS3935 lightning fields
+`lightning_km` (min storm-front distance), `lightning_energy` (max raw
+intensity) and `lightning_count` (strikes since last publish, 0 = quiet),
+and the GPS fields `lat`, `lon`, `alt_m`, `sats`, `speed_kmh` (see
 `postgres/init.sql`). GPS sensors are plotted on the **`/gps`** map view
 (1h/7d/30d).
 

@@ -1,0 +1,34 @@
+# Mirror dev -> public prod repo (cryox1/sensor-lab-prod) as snapshot commits.
+# Runs deploy/sync-prod.sh, which keeps prod's generic AGENTS.md/CLAUDE.md and
+# aborts if any denylisted private pattern would be published.
+#
+# Needs the PROD_SYNC_TOKEN secret: a fine-grained PAT scoped to ONLY
+# sensor-lab-prod with "Contents: Read and write". Without it the job skips
+# gracefully instead of failing.
+name: sync-prod
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    # Never run in the public mirror itself (this file gets synced there too).
+    if: github.repository == 'cryox1/sensor-lab'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync snapshot to sensor-lab-prod
+        env:
+          TOKEN: ${{ secrets.PROD_SYNC_TOKEN }}
+        run: |
+          if [ -z "${TOKEN}" ]; then
+            echo "PROD_SYNC_TOKEN not set -- skipping (add the secret to enable auto-sync)."
+            exit 0
+          fi
+          PROD_REPO="https://x-access-token:${TOKEN}@github.com/cryox1/sensor-lab-prod.git" \
+            ./deploy/sync-prod.sh

@@ -15,7 +15,9 @@ Source: `web/app/page.jsx`, `web/app/_components/SensorCard.jsx`,
   client-side via `getApiBase()` (`web/app/_lib/api.js`).
 - **Live overlay:** `useLiveSocket` (`web/app/_lib/useLiveSocket.js`) connects to
   `/ws/live` with exponential-backoff reconnect (1 s → 30 s cap) and stores the
-  latest message per `device_id`. **Merge rule:** the card shows the `GET /latest`
+  latest message per `device_id`. Frames without a string `device_id` (the
+  Blitzortung strike broadcasts, `type: "strike"`) are ignored — without that
+  guard each strike would spawn a phantom "undefined" card. **Merge rule:** the card shows the `GET /latest`
   row unless a live message is at least as new. WS `ts` is epoch *seconds*
   (number, → `ts * 1000`), REST `ts` is an ISO string (→ `Date.parse`); both are
   normalized to milliseconds before comparing (`liveMs >= prevMs` wins).
@@ -28,8 +30,10 @@ Source: `web/app/page.jsx`, `web/app/_components/SensorCard.jsx`,
   (from `displayNameFor`, falls back to device_id) with inline `NameEditor`
   (✎ → input → `PUT /devices/{id}/display-name {display_name}`), climate block
   (temp large, humidity, "feels like" heat index) when `temp_c != null`, air
-  block (eCO₂, TVOC, AQI/5) when `eco2_ppm != null`, pressure and battery rows
-  when present, `last seen` from `/devices` meta, and a `history →` link to
+  block (eCO₂, TVOC, AQI/5) when `eco2_ppm != null`, pressure, gas (kΩ,
+  BME680 nodes), lightning ("N strikes", plus ", storm ~X km" when a distance
+  is present; AS3935 nodes) and battery rows when present, `last seen` from `/devices`
+  meta, and a `history →` link to
   `/history/{device_id}`. A corner ✕ hides the device
   (`PUT /devices/{id}/visibility {hidden: true}`) and revalidates `/devices`.
 - **Hidden-device filtering:** devices with `hidden: true` are excluded from

@@ -111,13 +111,36 @@ export default function SensorCard({ id, live, meta, api, devicesKey, offsets, o
         </>
       )}
 
-      {!hasClimate && !hasAir && l && l.batt_v == null && l.pressure_hpa == null && (
+      {!hasClimate && !hasAir && l && l.batt_v == null && l.pressure_hpa == null && l.gas_kohm == null && l.lightning_count == null && l.iaq == null && (
         <div style={{ marginTop: 16, fontSize: 22, opacity: 0.5 }}>—</div>
+      )}
+
+      {l && l.iaq != null && (
+        <div style={{ marginTop: 12, fontSize: 13, opacity: 0.6 }}>
+          IAQ {Math.round(Number(l.iaq))}
+          {l.iaq_acc != null && Number(l.iaq_acc) < 3
+            ? ` (calibrating ${l.iaq_acc}/3)`
+            : ""}
+          {l.co2_eq_ppm != null ? ` · CO₂eq ${Math.round(Number(l.co2_eq_ppm))} ppm` : ""}
+        </div>
       )}
 
       {l && l.pressure_hpa != null && (
         <div style={{ marginTop: 12, fontSize: 13, opacity: 0.6 }}>
           pressure {Number(l.pressure_hpa).toFixed(1)} hPa
+        </div>
+      )}
+
+      {l && l.gas_kohm != null && (
+        <div style={{ marginTop: 12, fontSize: 13, opacity: 0.6 }}>
+          gas {Math.round(Number(l.gas_kohm))} kΩ
+        </div>
+      )}
+
+      {l && l.lightning_count != null && (
+        <div style={{ marginTop: 12, fontSize: 13, opacity: 0.6 }}>
+          lightning {Math.round(Number(l.lightning_count))} strikes
+          {l.lightning_km != null ? `, storm ~${Math.round(Number(l.lightning_km))} km` : ""}
         </div>
       )}
 

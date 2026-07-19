@@ -38,9 +38,16 @@ incomplete.
 | [`web-settings.md`](web-settings.md) | `/settings` — metric threshold editor |
 | [`api.md`](api.md) | FastAPI service — every route, auth, WebSocket, timestamp shapes |
 | [`ingest.md`](ingest.md) | MQTT → PostgreSQL writer, schema migrations, DLQ |
+| [`hw-firebeetle2-c6.md`](hw-firebeetle2-c6.md) | FireBeetle 2 ESP32-C6 (DFR1075) — the standard node board + deep-sleep skeleton |
+| [`hw-bme280.md`](hw-bme280.md) | `BME280_fbc6` node — GY-BME280 reference sensor of the comparison pair |
+| [`hw-bme680.md`](hw-bme680.md) | `BME680_fbc6` node — Gravity BME680, `gas_kohm` end-to-end |
+| [`hw-ens160.md`](hw-ens160.md) | `air03` node — ENS160+AHT21 always-on air node on FireBeetle 2 C6 |
+| [`hw-as3935.md`](hw-as3935.md) | `storm01` node — BME280 + AS3935 lightning sensor, solar-powered (Proposed) |
 
-Out of scope: `firmware/` (independent lifecycle; has its own ROADMAP), deploy
-tooling (governed by the mandatory rules in [`../AGENTS.md`](../AGENTS.md)).
+Out of scope: legacy firmware sketch internals (independent lifecycle; the
+XIAO C6 has its own ROADMAP) — but the standard node board and its sensor
+nodes are covered by the `hw-*` specs above — and deploy tooling (governed by
+the mandatory rules in [`../AGENTS.md`](../AGENTS.md)).
 
 ## Deployment note
 

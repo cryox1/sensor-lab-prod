@@ -11,17 +11,21 @@
 #   * Rebuild/restart only the app services.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 # Connection details. Override via env vars (no need to edit this file) -- e.g.
 #   export SENSOR_LAB_HOST=myserver SENSOR_LAB_USER=me \
 #          SENSOR_LAB_SSH_KEY=~/.ssh/id_ed25519 SENSOR_LAB_REMOTE_DIR=/home/me/sensor-lab
+# or keep them in deploy/deploy.env (gitignored) -- it is sourced automatically.
 # See DEPLOYMENT.md for the full setup interview.
+if [ -f "${SCRIPT_DIR}/deploy.env" ]; then
+  . "${SCRIPT_DIR}/deploy.env"
+fi
 HOST="${SENSOR_LAB_HOST:-myserver}"
 REMOTE_USER="${SENSOR_LAB_USER:-youruser}"
 KEY="${SENSOR_LAB_SSH_KEY:-${HOME}/.ssh/id_myserver}"
 REMOTE="${SENSOR_LAB_REMOTE_DIR:-/home/youruser/sensor-lab}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 ssh_remote() { ssh -i "${KEY}" "${REMOTE_USER}@${HOST}" "$@"; }
 

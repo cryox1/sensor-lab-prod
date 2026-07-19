@@ -14,6 +14,14 @@ CREATE TABLE IF NOT EXISTS telemetry (
   speed_kmh     DOUBLE PRECISION,
   batt_v        DOUBLE PRECISION,
   pressure_hpa  DOUBLE PRECISION,
+  gas_kohm      DOUBLE PRECISION,
+  lightning_km     SMALLINT,
+  lightning_energy INTEGER,
+  lightning_count  INTEGER,
+  iaq           DOUBLE PRECISION,
+  iaq_acc       SMALLINT,
+  co2_eq_ppm    DOUBLE PRECISION,
+  bvoc_eq_ppm   DOUBLE PRECISION,
   PRIMARY KEY (device_id, ts)
 );
 
@@ -33,6 +41,23 @@ ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS speed_kmh DOUBLE PRECISION;
 ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS batt_v    DOUBLE PRECISION;
 -- Atmospheric pressure (BME280 nodes, e.g. BME280_xiaoc6).
 ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS pressure_hpa DOUBLE PRECISION;
+-- Raw MOX gas resistance in kOhm (BME680 nodes, e.g. BME680_fbc6); higher = cleaner air.
+ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS gas_kohm DOUBLE PRECISION;
+-- AS3935 lightning fields (SEN0290 nodes, e.g. storm01). Per publish:
+-- lightning_km = min storm-front distance of the folded strikes (1 = overhead,
+-- 63 = out of range), lightning_energy = max raw intensity (21-bit, unitless),
+-- lightning_count = strikes since the previous publish (0 = listening, quiet).
+ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS lightning_km     SMALLINT;
+ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS lightning_energy INTEGER;
+ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS lightning_count  INTEGER;
+-- Bosch BSEC2 outputs (BME680 nodes running the IAQ algorithm, e.g. air04).
+-- iaq = static IAQ 0-500 (stationary devices), iaq_acc = calibration
+-- accuracy 0-3 (3 = fully calibrated), co2_eq_ppm / bvoc_eq_ppm = CO2 and
+-- breath-VOC equivalent estimates derived from the gas resistance.
+ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS iaq         DOUBLE PRECISION;
+ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS iaq_acc     SMALLINT;
+ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS co2_eq_ppm  DOUBLE PRECISION;
+ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS bvoc_eq_ppm DOUBLE PRECISION;
 
 CREATE INDEX IF NOT EXISTS telemetry_device_ts_idx
   ON telemetry (device_id, ts DESC);
@@ -91,3 +116,22 @@ CREATE TABLE IF NOT EXISTS sensor_group_members (
   device_id  TEXT   PRIMARY KEY,
   group_id   BIGINT NOT NULL REFERENCES sensor_groups(id) ON DELETE CASCADE
 );
+
+-- Blitzortung.org strikes within BLITZ_RADIUS_KM of the configured home
+-- location (ingest's BlitzortungConsumer writes, api's GET /strikes reads).
+-- ts is the strike time reported by the network (epoch ns, stored at µs);
+-- the PK dedups broker redeliveries and reconnect replays. distance_km is
+-- the haversine distance from home at insert time. Data: Blitzortung.org,
+-- private non-commercial use. ingest re-runs the same CREATEs on startup so
+-- existing volumes pick them up.
+CREATE TABLE IF NOT EXISTS lightning_strikes (
+  ts          TIMESTAMPTZ      NOT NULL,
+  lat         DOUBLE PRECISION NOT NULL,
+  lon         DOUBLE PRECISION NOT NULL,
+  distance_km DOUBLE PRECISION NOT NULL,
+  delay_s     DOUBLE PRECISION,
+  received_at TIMESTAMPTZ      NOT NULL DEFAULT now(),
+  PRIMARY KEY (ts, lat, lon)
+);
+CREATE INDEX IF NOT EXISTS lightning_strikes_ts_idx
+  ON lightning_strikes (ts DESC);

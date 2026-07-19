@@ -1,28 +1,35 @@
-// Headless deep-sleep BME280 node on Seeed XIAO ESP32-C6 (device BME280_xiaoc6).
+// Headless deep-sleep BME280 node on DFRobot FireBeetle 2 ESP32-C6 / DFR1075
+// (device BME280_fbc6). Sibling of bme680_firebeetle2_c6_deepsleep -- the two
+// boards run the same skeleton so the BME280 vs BME680 readings are comparable.
 //
 // Battery-first build: wake -> one-shot BME280 read -> publish one MQTT message
-// -> deep sleep. No display, no LED, no button. Mirrors dht11_xiao_c6_deepsleep
-// but reads a GY-BME280 over I2C and adds atmospheric pressure.
+// -> deep sleep. No display, no LED, no button. Port of bme280_xiao_c6_deepsleep
+// to the FireBeetle 2 C6.
 //
 // The C6 is an ESP32 (RISC-V): it wakes itself on the RTC timer, so there is
 // **NO D0->RST wire** to add.
 //
-// FLASHING GOTCHA: after an esptool/arduino-cli flash, this board's native
+// FLASHING GOTCHA: after an esptool/arduino-cli flash, a C6's native
 // USB-serial-JTAG often stays in ROM *download mode* (esptool's RTS hard-reset
 // can't boot the app here; the host holds the boot strap). Symptom: port stays
 // enumerated, zero serial, never publishes. Fix: physically POWER-CYCLE
 // (unplug/replug USB) once -- on a clean power-on GPIO9's pull-up boots the app,
 // and from then on every deep-sleep timer wake resets cleanly on its own.
 //
-// Board package: esp32 (Arduino-ESP32 core >= 3.0.0). Board: "XIAO_ESP32C6",
-// "USB CDC On Boot" enabled so Serial prints over the native USB port.
+// Board package: esp32 (Arduino-ESP32 core >= 3.0.0). Board: "DFRobot FireBeetle
+// 2 ESP32-C6" (FQBN esp32:esp32:dfrobot_firebeetle2_esp32c6:CDCOnBoot=cdc).
+// NOTE: unlike the XIAO, "USB CDC On Boot" defaults to DISABLED on this board --
+// enable it (IDE menu / :CDCOnBoot=cdc) or Serial stays silent on the USB port.
 // Libraries: PubSubClient only -- the BME280 driver is self-contained (raw Wire
 // + Bosch datasheet compensation), so no Adafruit_BME280 dependency.
 //
-// Wiring: BME280 VCC -> 3V3, GND -> GND, SDA -> D5 (GPIO23), SCL -> D6 (GPIO16).
-// NOTE: this is the swapped orientation of the labels -- on this build the wires
-// were left as SDA=D5/SCL=D6. initSensor() tries both orderings, so re-swapping
-// the wires to SDA=D6/SCL=D5 also works with no code change.
+// Wiring: GY-BME280 VCC -> 3V3, GND -> GND, SDA -> GPIO19, SCL -> GPIO20 (the
+// pins silkscreened SDA/SCL, i.e. the board's default I2C bus). initSensor()
+// tries both orderings, so swapped SDA/SCL wires also work with no code change.
+// Don't use the variant's D* aliases here -- on this board D6 is GPIO1 etc.
+//
+// Battery: the FireBeetle 2 C6 has an ONBOARD divider (2x) from VBAT to GPIO0,
+// so batt_v needs no external resistors (DFRobot wiki: analogReadMilliVolts*2).
 //
 // Optimizations: static IP + AP BSSID/channel cached in RTC memory for a
 // scanless reconnect; NTP only on cold boot and every NTP_RESYNC_WAKES wakes,
@@ -39,14 +46,15 @@
 #include "secrets.h"   // WIFI_SSID, WIFI_PASS, MQTT_HOST
 
 // ---- I2C / BME280 ----
-// Primary orientation (current wiring). initSensor() falls back to the swap.
-#define I2C_SDA        D5   // GPIO23
-#define I2C_SCL        D6   // GPIO16
+// The board's default I2C pins (silkscreen SDA/SCL). initSensor() falls back
+// to the swapped orientation automatically.
+#define I2C_SDA        19
+#define I2C_SCL        20
 
 // ---- Battery voltage sense ----
-// Enabled: a 1:2 divider (two equal ~100k from the 3V3/battery rail to A0/GPIO0)
-// is wired on this board, so we publish "batt_v". analogReadMilliVolts() is
-// Vref-calibrated; the *2.0 divider factor restores the rail voltage.
+// The FireBeetle 2 C6 has an onboard 1:2 divider from VBAT to GPIO0, so this
+// works with no external parts. analogReadMilliVolts() is Vref-calibrated; the
+// *2.0 divider factor restores the battery voltage (per the DFRobot wiki).
 #define ENABLE_BATTERY 1
 #define BATT_ADC_PIN   0
 #define BATT_DIVIDER   2.0f
@@ -68,13 +76,13 @@
 // persists across resets, so it looked like a silent hang) -- removed.
 
 // ---- Diagnostics ----
-// Published (retained) to a non-telemetry topic the bridge ignores, so it never
-// reaches Kafka/DB. Watch with: mosquitto_sub -t 'sensors/lab/BME280_xiaoc6/debug'
+// Published (retained) to a non-telemetry topic the ingest ignores, so it never
+// reaches the DB. Watch with: mosquitto_sub -t 'sensors/lab/BME280_fbc6/debug'
 #define DEBUG_TOPIC    "sensors/lab/" DEVICE_ID "/debug"
 
 // ---- Static IPv4 (ESP32 WiFi.config() takes TWO DNS servers) ----
 #define USE_STATIC_IP
-IPAddress STATIC_IP   (10, 0, 0, 61);   // free address on your LAN
+IPAddress STATIC_IP   (10, 0, 0, 68);   // free address on your LAN
 IPAddress STATIC_GW   (10, 0, 0,  1);
 IPAddress STATIC_MASK (255, 255, 255, 0);
 IPAddress STATIC_DNS  (10, 0, 0,  1);
@@ -82,7 +90,7 @@ IPAddress STATIC_DNS2 (1, 1, 1, 1);
 
 // ---- MQTT ----
 #define MQTT_PORT      1883
-#define DEVICE_ID      "BME280_xiaoc6"
+#define DEVICE_ID      "BME280_fbc6"
 #define MQTT_TOPIC     "sensors/lab/" DEVICE_ID "/telemetry"
 #define MQTT_CLIENT_ID "esp-" DEVICE_ID
 
@@ -384,7 +392,7 @@ void setup() {
   if (sensorOk) {
     if (!readBme(&t, &p, &h)) Serial.println(F("BME280 read failed"));
   } else {
-    Serial.println(F("No BME/BMP280 found (check SDA=D5, SCL=D6, 3V3, GND)"));
+    Serial.println(F("No BME/BMP280 found (check SDA=GPIO19, SCL=GPIO20, 3V3, GND)"));
   }
 
   bool needNtp = !rtcValid || rtcEpoch < 1700000000UL || rtcWakeCount >= NTP_RESYNC_WAKES;
