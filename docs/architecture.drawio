@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="architecture">
+    <mxGraphModel background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="esp" value="ESP sensor nodes&#xa;ESP8266 &#183; ESP32-C3 / C6" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="40" y="170" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="mosquitto" value="Mosquitto&#xa;MQTT broker :1883" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="340" y="170" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest" value="ingest&#xa;MQTT &#8594; Postgres" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="610" y="170" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres" value="PostgreSQL&#xa;:5433 (host)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=15;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="870" y="160" width="160" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="blitz" value="Blitzortung.org&#xa;public MQTT feed (optional)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="590" y="30" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="browser" value="Browser&#xa;dashboard &#183; /gps map" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="400" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="web" value="web&#xa;Next.js :9530" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="340" y="400" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="api" value="api&#xa;FastAPI :8000 + /ws/live" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="650" y="400" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value="MQTT" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="esp" target="mosquitto">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="sensors/#" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="mosquitto" target="ingest">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="INSERT" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="ingest" target="postgres">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="lightning strikes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="blitz" target="ingest">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="republish" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.25;exitY=1;entryX=0.75;entryY=1;" edge="1" parent="1" source="ingest" target="mosquitto">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="300" />
+              <mxPoint x="475" y="300" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="MQTT" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.25;entryY=0;" edge="1" parent="1" source="mosquitto" target="api">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="430" y="330" />
+              <mxPoint x="695" y="330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="SQL reads" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.75;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="api" target="postgres">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="785" y="340" />
+              <mxPoint x="950" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="HTTP" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="web" target="browser">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" value="REST + /ws/live WebSocket" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="api" target="browser">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="740" y="550" />
+              <mxPoint x="140" y="550" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
